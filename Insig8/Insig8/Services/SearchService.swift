@@ -467,6 +467,11 @@ class SearchService: ObservableObject {
                 // This case should not be reached here
                 break
                 
+            case .performSearch(let query):
+                // This should trigger a new search with the suggested query
+                // Implementation depends on how AppStore handles search delegation
+                print("Performing AI suggested search: \(query)")
+                
             case .custom(let identifier):
                 print("Custom action: \(identifier)")
             }
@@ -479,8 +484,10 @@ extension SearchResult.ResultType {
     var priority: Int {
         switch self {
         case .application: return 1
+        case .action: return 0  // AI actions get highest priority
         case .file: return 2
         case .systemAction: return 3
+        case .suggestion: return 6  // AI suggestions get lower priority
         case .custom("calculator"): return 1
         case .custom("web"): return 5
         default: return 4

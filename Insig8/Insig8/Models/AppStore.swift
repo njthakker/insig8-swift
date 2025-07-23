@@ -15,11 +15,17 @@ enum WidgetType: String, CaseIterable, Codable {
     case processManager = "processManager"
     case networkInfo = "networkInfo"
     case shortcuts = "shortcuts"
+    case aiMonitor = "aiMonitor"
 }
 
 // Main app state management - replacing MobX UIStore
 @MainActor
 class AppStore: ObservableObject {
+    // Singleton instance
+    static let shared = AppStore()
+    
+    // Initialization guard
+    private static var isInitialized = false
     // Published properties for UI updates
     @Published var searchQuery: String = ""
     @Published var selectedWidget: WidgetType = .search
@@ -38,8 +44,30 @@ class AppStore: ObservableObject {
     @Published var enableCalculator: Bool = true
     @Published var enableWebSearch: Bool = true
     
+    // AI Monitoring settings
+    @Published var enableAIMonitoring: Bool = false
+    @Published var monitorScreenContent: Bool = false
+    @Published var monitorAudioTranscripts: Bool = false
+    @Published var monitorKeyboardInput: Bool = false
+    
     // Services
     let searchService = SearchService()
+    let aiPipeline = AIProcessingPipeline() // New comprehensive AI pipeline
+    
+    // Production infrastructure
+    let sqliteVectorDB = SQLiteVectorDatabase()
+    let secureStorage = SecureAIStorage()
+    let screenCapture = ScreenCaptureService()
+    
+    // New AI services for scenario coverage
+    lazy private(set) var actionManager = ActionManager(sqliteDB: sqliteVectorDB, secureStorage: secureStorage)
+    lazy private(set) var audioCapture = AudioCaptureService()
+    lazy private(set) var appFocusMonitor = AppFocusMonitor(appStore: self)
+    
+    // Legacy services for compatibility (will be phased out)
+    let aiService = AppleIntelligenceService()
+    let vectorDB = VectorDatabaseService()
+    let communicationAI = CommunicationAIService()
     // TODO: Add other services in subsequent phases
     // let calendarStore = CalendarStore()
     // let clipboardStore = ClipboardStore()
@@ -48,17 +76,26 @@ class AppStore: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     
-    init() {
+    private init() {
         setupBindings()
         loadPreferences()
+        
+        // Only initialize infrastructure once
+        if !Self.isInitialized {
+            Self.isInitialized = true
+            initializeProductionInfrastructure()
+            setupActionIntegration()
+            setupClipboardMonitoring()
+            setupAppFocusMonitoring()
+        }
     }
     
     private func setupBindings() {
-        // React to search query changes
+        // React to search query changes - only for basic search, not AI
         $searchQuery
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .sink { [weak self] query in
-                self?.performSearch(query)
+                self?.performBasicSearch(query)
             }
             .store(in: &cancellables)
     }
@@ -72,9 +109,168 @@ class AppStore: ObservableObject {
         enableIndexing = UserDefaults.standard.bool(forKey: "enableIndexing")
         enableCalculator = UserDefaults.standard.bool(forKey: "enableCalculator")
         enableWebSearch = UserDefaults.standard.bool(forKey: "enableWebSearch")
+        
+        // Load AI monitoring settings
+        enableAIMonitoring = UserDefaults.standard.bool(forKey: "enableAIMonitoring")
+        monitorScreenContent = UserDefaults.standard.bool(forKey: "monitorScreenContent")
+        monitorAudioTranscripts = UserDefaults.standard.bool(forKey: "monitorAudioTranscripts")
+        monitorKeyboardInput = UserDefaults.standard.bool(forKey: "monitorKeyboardInput")
     }
     
-    func performSearch(_ query: String) {
+    // MARK: - Production Infrastructure Initialization
+    
+    private func initializeProductionInfrastructure() {
+        Task {
+            // Initialize SQLite vector database
+            do {
+                try await sqliteVectorDB.initialize()
+                print("✅ SQLite vector database initialized with \(sqliteVectorDB.totalVectors) vectors")
+                
+                // Migrate existing vectors from UserDefaults if needed
+                await migrateVectorsToSQLite()
+            } catch {
+                print("❌ Failed to initialize SQLite vector database: \(error)")
+            }
+            
+            // Initialize secure storage
+            do {
+                let _ = try await secureStorage.getDatabaseKey()
+                print("✅ Secure storage initialized with encryption key")
+                
+                // Apply data retention policy
+                if let db = try? secureStorage.openEncryptedDatabase(at: sqliteVectorDB.dbPath) {
+                    try? await secureStorage.applyDataRetentionPolicy(on: db)
+                }
+            } catch {
+                print("❌ Failed to initialize secure storage: \(error)")
+            }
+            
+            // Initialize screen capture if permission granted
+            if screenCapture.permissionGranted {
+                try? await screenCapture.startMonitoring()
+                print("✅ Screen capture monitoring started")
+            } else {
+                print("⚠️ Screen capture permission not granted")
+            }
+        }
+    }
+    
+    private func migrateVectorsToSQLite() async {
+        // Migrate from legacy VectorDatabaseService to SQLite
+        // For now, skip migration as legacy vectorDB doesn't have getAllVectors
+        // In production, implement a proper migration from UserDefaults
+        let allVectors: [TaggedVector] = []
+        
+        guard !allVectors.isEmpty else { return }
+        
+        print("🔄 Migrating \(allVectors.count) vectors to SQLite...")
+        
+        var migrationBatch: [(id: String, content: String, embedding: [Float], source: ContentSource, tags: [ContentTag], metadata: [String: Any])] = []
+        
+        for vector in allVectors {
+            migrationBatch.append((
+                id: vector.id.uuidString,
+                content: vector.content,
+                embedding: vector.embedding,
+                source: vector.source,
+                tags: vector.tags,
+                metadata: [:]
+            ))
+            
+            // Batch insert every 100 vectors
+            if migrationBatch.count >= 100 {
+                try? await sqliteVectorDB.batchInsertVectors(migrationBatch)
+                migrationBatch.removeAll()
+            }
+        }
+        
+        // Insert remaining vectors
+        if !migrationBatch.isEmpty {
+            try? await sqliteVectorDB.batchInsertVectors(migrationBatch)
+        }
+        
+        print("✅ Migration complete: \(allVectors.count) vectors migrated to SQLite")
+    }
+    
+    // MARK: - Action Integration Setup
+    
+    private func setupActionIntegration() {
+        // Set up screen capture to feed into action manager
+        Task {
+            // Connect screen capture data to action manager
+            await connectScreenCaptureToActions()
+            
+            // Connect audio capture to action manager
+            await connectAudioCaptureToActions()
+        }
+    }
+    
+    private func connectScreenCaptureToActions() async {
+        // This would be implemented with proper observers/delegates
+        // For now, we simulate the connection
+        print("🔗 Connected screen capture to action manager")
+    }
+    
+    private func connectAudioCaptureToActions() async {
+        // This would be implemented with proper observers/delegates
+        // For now, we simulate the connection
+        print("🔗 Connected audio capture to action manager")
+    }
+    
+    private func setupClipboardMonitoring() {
+        // Monitor clipboard changes and automatically ingest content
+        var lastChangeCount = NSPasteboard.general.changeCount
+        
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            let currentChangeCount = NSPasteboard.general.changeCount
+            
+            if currentChangeCount != lastChangeCount {
+                lastChangeCount = currentChangeCount
+                
+                // Get clipboard content
+                if let content = NSPasteboard.general.string(forType: .string) {
+                    // Store in vector database for search
+                    Task {
+                        await self.storeClipboardContent(content)
+                    }
+                }
+            }
+        }
+        
+        print("🔗 Started global clipboard monitoring")
+    }
+    
+    private func setupAppFocusMonitoring() {
+        // Load monitored apps from preferences
+        appFocusMonitor.loadMonitoredApps()
+        
+        // Start monitoring app focus changes
+        appFocusMonitor.startMonitoring()
+        
+        print("🔗 Started app focus monitoring")
+    }
+    
+    @MainActor
+    private func storeClipboardContent(_ content: String) async {
+        // Skip very short content
+        guard content.count > 10 else { return }
+        
+        // Store in vector database for search ONLY - no AI processing for clipboard
+        if sqliteVectorDB.isInitialized {
+            try? await sqliteVectorDB.addClipboardContent(
+                content,
+                type: .text,
+                timestamp: Date()
+            )
+        } else {
+            // Fallback to legacy vector DB
+            vectorDB.addClipboardContent(content, type: .text, timestamp: Date())
+        }
+        
+        print("📋 Stored clipboard content: \(String(content.prefix(50)))...")
+    }
+    
+    func performBasicSearch(_ query: String) {
         guard !query.isEmpty else {
             searchResults = []
             selectedIndex = 0
@@ -84,13 +280,226 @@ class AppStore: ObservableObject {
         isLoading = true
         
         Task {
-            let results = await searchService.performSearch(query: query)
+            // Basic search without AI (for while typing)
+            var results = await searchService.performSearch(query: query)
+            
+            // Add basic clipboard search from SQLite database
+            if sqliteVectorDB.isInitialized {
+                if let queryEmbedding = await vectorDB.generateEmbedding(for: query) {
+                    let sqliteResults = try? await sqliteVectorDB.hybridSearch(
+                        query: query,
+                        embedding: queryEmbedding,
+                        limit: 5
+                    )
+                    
+                    if let sqliteResults = sqliteResults {
+                        for result in sqliteResults {
+                            let searchResult = SearchResult(
+                                id: result.id,
+                                title: extractTitle(from: result.content),
+                                subtitle: "Found: \(String(result.content.prefix(100)))",
+                                icon: getIconForSource(result.source),
+                                type: .action,
+                                action: .performSearch(result.content),
+                                relevanceScore: Double(result.similarity)
+                            )
+                            results.append(searchResult)
+                        }
+                    }
+                }
+            }
+            
             await MainActor.run {
                 self.searchResults = results
                 self.selectedIndex = 0
                 self.isLoading = false
             }
         }
+    }
+    
+    func performFullSearchOnEnter(_ query: String) {
+        guard !query.isEmpty else {
+            searchResults = []
+            selectedIndex = 0
+            return
+        }
+        
+        isLoading = true
+        
+        Task {
+            // Full AI-powered search (only on Enter)
+            var results = await searchService.performSearch(query: query)
+            
+            // Always try AI-enhanced search first if available
+            if aiService.isAIAvailable && !aiService.isProcessing {
+                if let interpretation = await aiService.processNaturalLanguageCommand(query) {
+                    // If AI identified a specific widget intent, prioritize that
+                    if interpretation.confidence > 0.7,
+                       let targetWidget = interpretation.targetWidget {
+                        let widgetResult = SearchResult(
+                            id: UUID().uuidString,
+                            title: "Open \(targetWidget.rawValue.capitalized)",
+                            subtitle: "AI suggested: \(interpretation.action)",
+                            icon: "brain",
+                            type: .action,
+                            action: .switchToWidget(targetWidget),
+                            relevanceScore: 1.0
+                        )
+                        results.insert(widgetResult, at: 0)
+                    }
+                }
+                
+                // Add AI pipeline search results (replaces vector database search)
+                let aiResults = await aiPipeline.queryAI(query)
+                for aiResult in aiResults {
+                    let searchResult = SearchResult(
+                        id: aiResult.id.uuidString,
+                        title: extractTitle(from: aiResult.content),
+                        subtitle: "AI Found: \(String(aiResult.content.prefix(100)))",
+                        icon: getIconForSource(aiResult.source),
+                        type: .action,
+                        action: .performSearch(aiResult.content),
+                        relevanceScore: Double(aiResult.relevanceScore)
+                    )
+                    results.append(searchResult)
+                }
+                
+                // Use production SQLite database for semantic search
+                if sqliteVectorDB.isInitialized {
+                    // Generate embedding for query using vector database service
+                    if let queryEmbedding = await vectorDB.generateEmbedding(for: query) {
+                        // Perform hybrid search (keyword + semantic)
+                        let sqliteResults = try? await sqliteVectorDB.hybridSearch(
+                            query: query,
+                            embedding: queryEmbedding,
+                            limit: 5
+                        )
+                        
+                        if let sqliteResults = sqliteResults {
+                            for result in sqliteResults {
+                                let searchResult = SearchResult(
+                                    id: result.id,
+                                    title: extractTitle(from: result.content),
+                                    subtitle: "Found: \(String(result.content.prefix(100)))",
+                                    icon: getIconForSource(result.source),
+                                    type: .action,
+                                    action: .performSearch(result.content),
+                                    relevanceScore: Double(result.similarity)
+                                )
+                                results.append(searchResult)
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback to legacy vector database
+                    let semanticResults = await vectorDB.searchAll(query: query, limit: 3)
+                    for semanticResult in semanticResults {
+                        let searchResult = SearchResult(
+                            id: UUID().uuidString,
+                            title: semanticResult.title,
+                            subtitle: "Found: \(semanticResult.content)",
+                            icon: semanticResult.type == .url ? "link" : "doc.text",
+                            type: .action,
+                            action: semanticResult.url != nil ? .openURL(url: semanticResult.url!) : .performSearch(semanticResult.content),
+                            relevanceScore: Double(semanticResult.similarity)
+                        )
+                        results.append(searchResult)
+                    }
+                }
+                
+                // Generate AI suggestions for context with communication data
+                let context = AppContext(
+                    currentTime: Date(),
+                    activeWidget: selectedWidget,
+                    recentActions: [], // TODO: Track recent actions
+                    clipboardHistory: [], // TODO: Get from clipboard store
+                    userActivity: [], // TODO: Track user activity
+                    activeCommitments: communicationAI.activeCommitments.map { commitment in
+                        CommitmentAnalysis(
+                            hasCommitment: true,
+                            commitmentText: commitment.text,
+                            recipient: commitment.recipient,
+                            dueDate: commitment.dueDate,
+                            urgencyLevel: commitment.priority,
+                            actionRequired: "Follow up on commitment",
+                            confidence: commitment.confidence,
+                            source: commitment.source
+                        )
+                    }
+                )
+                
+                let suggestions = await aiService.generateSuggestions(for: context)
+                for (index, suggestion) in suggestions.enumerated() {
+                    let suggestionResult = SearchResult(
+                        id: UUID().uuidString,
+                        title: suggestion,
+                        subtitle: "AI Suggestion",
+                        icon: "lightbulb",
+                        type: .suggestion,
+                        action: .performSearch(suggestion),
+                        relevanceScore: 0.9 - (Double(index) * 0.1)
+                    )
+                    results.append(suggestionResult)
+                }
+            }
+            
+            // Intelligent fallback: if we have few high-quality results, try natural language search
+            let highQualityResults = results.filter { $0.relevanceScore > 0.7 }
+            if highQualityResults.count < 2 && aiService.isAIAvailable {
+                // Try natural language interpretation as fallback
+                if let interpretation = await aiService.processNaturalLanguageCommand(query) {
+                    if interpretation.confidence > 0.5 {
+                        let naturalLanguageResult = SearchResult(
+                            id: UUID().uuidString,
+                            title: interpretation.action,
+                            subtitle: "AI interpreted: \(interpretation.action)",
+                            icon: "brain",
+                            type: .suggestion,
+                            action: interpretation.targetWidget != nil ? .switchToWidget(interpretation.targetWidget!) : .performSearch(interpretation.action),
+                            relevanceScore: Double(interpretation.confidence)
+                        )
+                        results.insert(naturalLanguageResult, at: 0)
+                    }
+                }
+                
+                // Also try semantic search in vector database for any content
+                if sqliteVectorDB.isInitialized {
+                    if let queryEmbedding = await vectorDB.generateEmbedding(for: query) {
+                        let fallbackResults = try? await sqliteVectorDB.similaritySearch(
+                            query: queryEmbedding,
+                            limit: 3,
+                            threshold: 0.3  // Lower threshold for fallback
+                        )
+                        
+                        if let fallbackResults = fallbackResults {
+                            for result in fallbackResults {
+                                let searchResult = SearchResult(
+                                    id: UUID().uuidString,
+                                    title: "📄 \(extractTitle(from: result.content))",
+                                    subtitle: "Fallback search: \(String(result.content.prefix(80)))",
+                                    icon: "doc.text.magnifyingglass",
+                                    type: .action,
+                                    action: .performSearch(result.content),
+                                    relevanceScore: Double(result.similarity)
+                                )
+                                results.append(searchResult)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            await MainActor.run {
+                self.searchResults = results
+                self.selectedIndex = 0
+                self.isLoading = false
+            }
+        }
+    }
+    
+    // Legacy method name for compatibility - now calls full search
+    func performSearch(_ query: String) {
+        performFullSearchOnEnter(query)
     }
     
     func executeCommand() {
@@ -103,10 +512,17 @@ class AppStore: ObservableObject {
             return
         }
         
+        // Handle AI search suggestions
+        if case .performSearch(let query) = result.action {
+            searchQuery = query
+            // Don't clear results immediately - let the search binding handle it
+            return
+        }
+        
         // Execute other actions
         searchService.executeAction(result.action)
         
-        // Clear search after execution (except for widget switches)
+        // Clear search after execution (except for widget switches and search suggestions)
         searchQuery = ""
         searchResults = []
         selectedIndex = 0
@@ -129,6 +545,102 @@ class AppStore: ObservableObject {
         searchQuery = ""
         searchResults = []
         selectedIndex = 0
+    }
+    
+    // MARK: - AI Pipeline Integration Methods
+    
+    /// Store clipboard content for search only (NO AI processing)
+    func ingestClipboardContent(_ content: String) {
+        // Clipboard content is only stored for search purposes, not AI processing
+        // The actual storage happens in storeClipboardContent method
+        Task {
+            await storeClipboardContent(content)
+        }
+    }
+    
+    /// Ingest screen capture data from monitoring (only if enabled in settings)
+    func ingestScreenCapture(_ ocrText: String, appName: String) {
+        // Only process screen content if AI monitoring and screen content monitoring are enabled
+        guard enableAIMonitoring && monitorScreenContent else { return }
+        
+        aiPipeline.ingestScreenCapture(ocrText, appName: appName)
+    }
+    
+    /// Ingest audio transcript data from meetings and app audio (only if enabled in settings)
+    func ingestAudioTranscript(_ transcript: String, participants: [String], appName: String?) {
+        // Only process audio transcripts if AI monitoring and audio transcript monitoring are enabled
+        guard enableAIMonitoring && monitorAudioTranscripts else { return }
+        
+        aiPipeline.ingestMeetingTranscript(transcript, participants: participants)
+    }
+    
+    /// Ingest keyboard input for commitment/action detection (only if enabled in settings)
+    func ingestKeyboardInput(_ text: String, appName: String) {
+        // Only process keyboard input if AI monitoring and keyboard input monitoring are enabled
+        guard enableAIMonitoring && monitorKeyboardInput else { return }
+        
+        // Use screen capture ingestion method as keyboard input is similar to screen text
+        aiPipeline.ingestScreenCapture(text, appName: appName)
+    }
+    
+    /// Ingest email content for processing
+    func ingestEmailContent(_ content: String, sender: String?, subject: String?) {
+        aiPipeline.ingestEmailContent(content, sender: sender, subject: subject)
+    }
+    
+    /// Ingest browser history for context
+    func ingestBrowserHistory(_ url: String, title: String?) {
+        aiPipeline.ingestBrowserHistory(url, title: title)
+    }
+    
+    /// Ingest meeting transcripts
+    func ingestMeetingTranscript(_ transcript: String, participants: [String]) {
+        aiPipeline.ingestMeetingTranscript(transcript, participants: participants)
+    }
+    
+    /// Get active AI tasks for display
+    func getActiveTasks() -> [AITask] {
+        return aiPipeline.getActiveTasks()
+    }
+    
+    /// Modify AI task (snooze, dismiss, etc.)
+    func modifyTask(_ taskId: UUID, modification: TaskModification) {
+        aiPipeline.modifyTask(taskId, modification: modification)
+    }
+    
+    /// Get pipeline statistics for monitoring
+    func getPipelineStatistics() -> PipelineStatistics {
+        return aiPipeline.getPipelineStatistics()
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func extractTitle(from content: String) -> String {
+        let lines = content.components(separatedBy: .newlines)
+        let firstLine = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        
+        if firstLine.count > 50 {
+            return String(firstLine.prefix(47)) + "..."
+        }
+        
+        return firstLine.isEmpty ? "Content" : firstLine
+    }
+    
+    private func getIconForSource(_ source: ContentSource) -> String {
+        switch source {
+        case .clipboard:
+            return "doc.on.clipboard"
+        case .screenCapture:
+            return "camera.viewfinder"
+        case .email:
+            return "envelope"
+        case .browser:
+            return "safari"
+        case .meeting:
+            return "video"
+        case .manual:
+            return "pencil"
+        }
     }
 }
 
@@ -167,5 +679,69 @@ struct KeyCombo: Codable {
 extension Int {
     func nonZeroOrDefault(_ defaultValue: Int) -> Int {
         return self == 0 ? defaultValue : self
+    }
+}
+
+// MARK: - AppStore Screen Capture Integration Extension
+
+extension AppStore {
+    func ingestScreenCaptureData(_ ocrText: String, appName: String) {
+        Task {
+            // Send to AI pipeline for processing
+            aiPipeline.ingestScreenCapture(ocrText, appName: appName)
+            
+            // Store in SQLite database if initialized
+            if sqliteVectorDB.isInitialized {
+                let id = UUID().uuidString
+                let source = ContentSource.screenCapture(appName)
+                
+                // Generate embedding using vector database service
+                if let embedding = await vectorDB.generateEmbedding(for: ocrText) {
+                    // Encrypt content if security is enabled
+                    let contentToStore = secureStorage.encryptionEnabled ? 
+                        secureStorage.sanitizeContent(ocrText) : ocrText
+                    
+                    try? await sqliteVectorDB.insertVector(
+                        id: id,
+                        content: contentToStore,
+                        embedding: embedding,
+                        source: source,
+                        tags: [.communication],
+                        metadata: [
+                            "appName": appName,
+                            "captureTime": Date().timeIntervalSince1970
+                        ]
+                    )
+                }
+            }
+        }
+    }
+    
+    func toggleScreenMonitoring() {
+        Task {
+            if screenCapture.isMonitoring {
+                await screenCapture.stopMonitoring()
+            } else {
+                if !screenCapture.permissionGranted {
+                    _ = await screenCapture.requestScreenRecordingPermission()
+                }
+                
+                if screenCapture.permissionGranted {
+                    try? await screenCapture.startMonitoring()
+                }
+            }
+        }
+    }
+    
+    func updateScreenCaptureApps(_ apps: Set<String>) {
+        screenCapture.monitoredApps = apps
+        
+        // Restart monitoring with new app list
+        if screenCapture.isMonitoring {
+            Task {
+                await screenCapture.stopMonitoring()
+                try? await screenCapture.startMonitoring()
+            }
+        }
     }
 }

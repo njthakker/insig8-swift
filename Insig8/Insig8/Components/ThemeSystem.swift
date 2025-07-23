@@ -9,7 +9,9 @@ class ThemeManager: ObservableObject {
     @Published var effectiveTheme: EffectiveTheme = .light
     
     init() {
-        updateEffectiveTheme()
+        Task { @MainActor in
+            await updateEffectiveTheme()
+        }
         observeSystemThemeChanges()
     }
     
@@ -21,12 +23,13 @@ class ThemeManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.updateEffectiveTheme()
+                await self?.updateEffectiveTheme()
             }
         }
     }
     
-    private func updateEffectiveTheme() {
+    @MainActor
+    private func updateEffectiveTheme() async {
         switch currentTheme {
         case .light:
             effectiveTheme = .light
@@ -40,7 +43,9 @@ class ThemeManager: ObservableObject {
     
     func setTheme(_ theme: AppTheme) {
         currentTheme = theme
-        updateEffectiveTheme()
+        Task { @MainActor in
+            await updateEffectiveTheme()
+        }
         
         // Apply system appearance
         switch theme {

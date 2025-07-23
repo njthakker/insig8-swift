@@ -106,6 +106,8 @@ struct SearchResultRow: View {
         case .calendarEvent: return "Event"
         case .clipboardItem: return "Clipboard"
         case .emoji: return "Emoji"
+        case .action: return "AI Action"
+        case .suggestion: return "AI Suggestion"
         case .custom: return "Custom"
         }
     }
@@ -151,6 +153,6 @@ struct LoadingView: View {
 
 #Preview {
     SearchWidgetView()
-        .environmentObject(AppStore())
+        .environmentObject(AppStore.shared)
         .frame(width: 800, height: 600)
 }

@@ -274,6 +274,74 @@ struct GeneralPreferencesView: View {
                     }
                 }
                 
+                // AI Monitoring Settings
+                PreferencesSection(title: "AI Monitoring") {
+                    VStack(spacing: DesignTokens.Spacing.md) {
+                        PreferencesToggleRow(
+                            title: "Enable AI Monitoring",
+                            description: "Allow AI to monitor selected apps for actions and reminders",
+                            isOn: $appStore.enableAIMonitoring
+                        )
+                        .onChange(of: appStore.enableAIMonitoring) { _, newValue in
+                            UserDefaults.standard.set(newValue, forKey: "enableAIMonitoring")
+                        }
+                        
+                        if appStore.enableAIMonitoring {
+                            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                                Text("Monitor these data sources:")
+                                    .font(DesignTokens.Typography.caption1)
+                                    .foregroundColor(DesignTokens.Colors.onSurfaceSecondary)
+                                
+                                PreferencesToggleRow(
+                                    title: "Screen Content",
+                                    description: "Monitor screen text for actions and commitments",
+                                    isOn: $appStore.monitorScreenContent
+                                )
+                                .onChange(of: appStore.monitorScreenContent) { _, newValue in
+                                    UserDefaults.standard.set(newValue, forKey: "monitorScreenContent")
+                                }
+                                
+                                PreferencesToggleRow(
+                                    title: "Audio Transcripts",
+                                    description: "Monitor app audio and microphone for meetings",
+                                    isOn: $appStore.monitorAudioTranscripts
+                                )
+                                .onChange(of: appStore.monitorAudioTranscripts) { _, newValue in
+                                    UserDefaults.standard.set(newValue, forKey: "monitorAudioTranscripts")
+                                }
+                                
+                                PreferencesToggleRow(
+                                    title: "Keyboard Input",
+                                    description: "Monitor typing for commitments and actions",
+                                    isOn: $appStore.monitorKeyboardInput
+                                )
+                                .onChange(of: appStore.monitorKeyboardInput) { _, newValue in
+                                    UserDefaults.standard.set(newValue, forKey: "monitorKeyboardInput")
+                                }
+                            }
+                            .padding(.leading, DesignTokens.Spacing.md)
+                        }
+                        
+                        PreferencesPickerRow(
+                            title: "Monitored Apps",
+                            description: "Select apps to monitor for AI processing",
+                            selection: .constant(5), // Placeholder
+                            options: [1, 3, 5, 10, 20]
+                        )
+                        
+                        HStack {
+                            EnhancedButton(
+                                text: "Configure Apps",
+                                style: .secondary
+                            ) {
+                                showMonitoringAppsConfiguration()
+                            }
+                            
+                            Spacer()
+                        }
+                    }
+                }
+                
                 // Clipboard Settings
                 PreferencesSection(title: "Clipboard") {
                     VStack(spacing: DesignTokens.Spacing.md) {
@@ -316,6 +384,11 @@ struct GeneralPreferencesView: View {
     private func clearClipboardHistory() {
         // TODO: Implement clipboard history clearing
         print("Clearing clipboard history...")
+    }
+    
+    private func showMonitoringAppsConfiguration() {
+        // TODO: Show app monitoring configuration sheet
+        print("Showing monitoring apps configuration...")
     }
 }
 
@@ -657,13 +730,13 @@ struct PreferencesPickerRow: View {
 
 #Preview("Settings Widget") {
     SettingsWidgetView()
-        .environmentObject(AppStore())
+        .environmentObject(AppStore.shared)
         .themingEnabled()
         .frame(width: 400, height: 500)
 }
 
 #Preview("Preferences Window") {
     PreferencesWindow()
-        .environmentObject(AppStore())
+        .environmentObject(AppStore.shared)
         .themingEnabled()
 }

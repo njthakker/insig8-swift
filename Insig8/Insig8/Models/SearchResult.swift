@@ -36,6 +36,8 @@ struct SearchResult: Identifiable, Codable, Equatable {
         case calendarEvent
         case clipboardItem
         case emoji
+        case action
+        case suggestion
         case custom(String)
         
         var displayName: String {
@@ -46,6 +48,8 @@ struct SearchResult: Identifiable, Codable, Equatable {
             case .calendarEvent: return "Event"
             case .clipboardItem: return "Clipboard"
             case .emoji: return "Emoji"
+            case .action: return "Action"
+            case .suggestion: return "Suggestion"
             case .custom(let type): return type.capitalized
             }
         }
@@ -68,6 +72,7 @@ struct SearchResult: Identifiable, Codable, Equatable {
         case restart
         case shutdown
         case switchToWidget(WidgetType)
+        case performSearch(String)
         case custom(String)
         
         var description: String {
@@ -87,6 +92,7 @@ struct SearchResult: Identifiable, Codable, Equatable {
             case .restart: return "Restart"
             case .shutdown: return "Shut Down"
             case .switchToWidget: return "Switch to Widget"
+            case .performSearch: return "Perform Search"
             case .custom(let action): return action
             }
         }

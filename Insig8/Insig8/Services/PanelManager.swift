@@ -7,7 +7,7 @@ class PanelManager: NSObject, ObservableObject {
     
     private var panel: NSPanel?
     private var hostingView: NSHostingView<AnyView>?
-    let appStore = AppStore() // Make this accessible for menu actions
+    let appStore = AppStore.shared // Make this accessible for menu actions
     
     let objectWillChange = PassthroughSubject<Void, Never>()
     

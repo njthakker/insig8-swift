@@ -30,6 +30,10 @@
     <true/>
     <key>NSCalendarsUsageDescription</key>
     <string>Insig8 needs access to your calendar to show upcoming events.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Insig8 needs full access to your calendar to display and manage your events and reminders.</string>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+    <string>Insig8 needs calendar access to create events and reminders.</string>
     <key>NSContactsUsageDescription</key>
     <string>Insig8 needs access to your contacts for search functionality.</string>
     <key>NSRemindersUsageDescription</key>
@@ -38,5 +42,15 @@
     <string>Insig8 needs to control other applications to perform system actions.</string>
     <key>NSSystemAdministrationUsageDescription</key>
     <string>Insig8 needs administrator privileges for some system actions.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Insig8 uses speech recognition to transcribe meeting audio and voice commands for AI-powered assistance.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Insig8 needs microphone access to capture and transcribe audio for meeting intelligence and voice commands.</string>
+    <key>NSScreenRecordingUsageDescription</key>
+    <string>Insig8 captures screen content to provide AI-powered insights and assistance with your work context.</string>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.microphone</key>
+    <true/>
 </dict>
 </plist>

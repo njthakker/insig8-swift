@@ -43,7 +43,12 @@ struct SearchInputView: View {
                 appStore.searchQuery = suggestion
             },
             onSubmit: {
-                appStore.executeCommand()
+                // On Enter, perform full AI search then execute command
+                appStore.performFullSearchOnEnter(appStore.searchQuery)
+                // Small delay to let the AI search complete before executing
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    appStore.executeCommand()
+                }
             }
         )
     }
@@ -56,6 +61,7 @@ struct SearchInputView: View {
         case .translation: return "globe"
         case .emoji: return "face.smiling"
         case .settings: return "gear"
+        case .aiMonitor: return "brain.head.profile"
         default: return "command"
         }
     }
@@ -68,6 +74,7 @@ struct SearchInputView: View {
         case .translation: return "Enter text to translate..."
         case .emoji: return "Search emojis..."
         case .settings: return "Search settings..."
+        case .aiMonitor: return "Monitor AI processing..."
         default: return "Type a command..."
         }
     }
@@ -93,7 +100,11 @@ struct WidgetContentView: View {
         Group {
             switch appStore.selectedWidget {
             case .search:
-                SearchWidgetView()
+                if appStore.searchQuery.isEmpty {
+                    ActionDashboardView()
+                } else {
+                    SearchWidgetView()
+                }
             case .calendar:
                 CalendarWidgetView()
             case .clipboard:
@@ -103,7 +114,14 @@ struct WidgetContentView: View {
             case .emoji:
                 EmojiWidgetView()
             case .settings:
-                SettingsWidgetView()
+                // Check if AI settings should be shown
+                if appStore.searchQuery.contains("ai") && appStore.searchQuery.contains("permission") {
+                    AIPermissionsWidget()
+                } else {
+                    SettingsWidgetView()
+                }
+            case .aiMonitor:
+                AIMonitorWidget()
             default:
                 EmptyView()
             }
@@ -194,6 +212,6 @@ class KeyHandlerView: NSView {
 
 #Preview {
     ContentView()
-        .environmentObject(AppStore())
+        .environmentObject(AppStore.shared)
         .frame(width: 800, height: 600)
 }

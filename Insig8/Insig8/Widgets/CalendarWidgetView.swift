@@ -32,14 +32,50 @@ struct CalendarPermissionView: View {
             Text("Calendar Access Required")
                 .font(.title2)
             
-            Text("Insig8 needs access to your calendar to show events")
-                .font(.body)
+            VStack(spacing: 12) {
+                Text("Insig8 needs calendar access to show your events:")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("1.")
+                            .fontWeight(.semibold)
+                        Text("Open System Settings")
+                    }
+                    .font(.caption)
+                    
+                    HStack {
+                        Text("2.")
+                            .fontWeight(.semibold)
+                        Text("Go to Privacy & Security > Calendar")
+                    }
+                    .font(.caption)
+                    
+                    HStack {
+                        Text("3.")
+                            .fontWeight(.semibold)
+                        Text("Enable access for Insig8")
+                    }
+                    .font(.caption)
+                }
                 .foregroundColor(.secondary)
-            
-            Button("Grant Access") {
-                calendarService.requestAccess()
             }
-            .buttonStyle(.borderedProminent)
+            
+            VStack(spacing: 12) {
+                Button("Open System Settings") {
+                    print("Opening System Settings for calendar permissions")
+                    calendarService.requestAccess()
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button("I've granted access - Recheck") {
+                    print("Rechecking calendar permissions")
+                    calendarService.recheckPermissions()
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

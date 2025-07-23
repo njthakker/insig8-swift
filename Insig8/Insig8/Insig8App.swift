@@ -4,7 +4,7 @@ import AppKit
 @main
 struct Insig8App: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var appStore = AppStore()
+    @ObservedObject private var appStore = AppStore.shared
     
     var body: some Scene {
         // Empty WindowGroup - we'll use custom NSPanel instead
@@ -41,10 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up global hotkey
         setupGlobalHotKey()
         
-        // Hide dock icon if preference is set
-        updateDockIconVisibility()
-        
-        // Set activation policy
+        // Set activation policy - start as accessory (menu bar app)
         NSApp.setActivationPolicy(.accessory)
         
         // Close any SwiftUI windows that opened automatically
@@ -64,11 +61,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "command", accessibilityDescription: "Insig8")
-            button.action = #selector(showMenuBarDropdown)
+            
+            // Set up button for both left and right clicks (don't assign menu directly)
             button.target = self
-            print("Menu bar item set up with dropdown menu")
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            
+            print("Menu bar item set up with click handlers")
         } else {
             print("Failed to get status item button")
+        }
+    }
+    
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+        
+        print("Status item clicked with event type: \(event.type.rawValue)")
+        
+        if event.type == .rightMouseUp {
+            // Right click - show menu
+            let menu = createMenu()
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+        } else {
+            // Left click - open command palette
+            print("Left click detected - opening command palette")
+            openCommandPalette()
         }
     }
     
@@ -79,15 +96,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    @objc private func showMenuBarDropdown() {
-        // Create menu and set it immediately before showing
+    private func createMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         
         // Command Palette option
         let commandPaletteItem = NSMenuItem(title: "Open Command Palette", action: #selector(openCommandPalette), keyEquivalent: "")
         commandPaletteItem.target = self
-        commandPaletteItem.isEnabled = true
         menu.addItem(commandPaletteItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -95,17 +110,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Quick access widgets
         let calendarItem = NSMenuItem(title: "View Calendar Events", action: #selector(openCalendarWidget), keyEquivalent: "")
         calendarItem.target = self
-        calendarItem.isEnabled = true
         menu.addItem(calendarItem)
         
         let clipboardItem = NSMenuItem(title: "Clipboard History", action: #selector(openClipboardWidget), keyEquivalent: "")
         clipboardItem.target = self
-        clipboardItem.isEnabled = true
         menu.addItem(clipboardItem)
         
         let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettingsWidget), keyEquivalent: ",")
         settingsItem.target = self
-        settingsItem.isEnabled = true
         menu.addItem(settingsItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -113,24 +125,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // App controls
         let aboutItem = NSMenuItem(title: "About Insig8", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
-        aboutItem.isEnabled = true
         menu.addItem(aboutItem)
         
         let quitItem = NSMenuItem(title: "Quit Insig8", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
-        quitItem.isEnabled = true
         menu.addItem(quitItem)
         
-        // Show the menu at the status item position
-        if let button = statusItem?.button {
-            statusItem?.menu = menu
-            button.performClick(nil)
-            
-            // Schedule removal of menu after showing
-            DispatchQueue.main.async { [weak self] in
-                self?.statusItem?.menu = nil
-            }
-        }
+        return menu
     }
     
     @objc private func openCommandPalette() {
@@ -179,6 +180,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // This will be controlled by user preference
         let showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+    }
+    
+    // Allow calendar service to temporarily become regular app for permission dialogs
+    static func temporarilyShowInDock() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    static func hideFromDock() {
+        NSApp.setActivationPolicy(.accessory)
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
