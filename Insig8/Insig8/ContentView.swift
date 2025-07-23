@@ -17,7 +17,11 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
-            // Focus is now handled by notification from PanelManager
+            // Set initial focus
+            isSearchFieldFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSearchField)) { _ in
+            isSearchFieldFocused = true
         }
         .background(KeyEventHandlingView(appStore: appStore))
     }
@@ -33,6 +37,7 @@ struct SearchInputView: View {
             placeholder: placeholderText,
             leadingIcon: currentIcon,
             suggestions: searchSuggestions,
+            isFocused: $isSearchFieldFocused,
             onSuggestionTap: { suggestion in
                 // Handle suggestion selection
                 appStore.searchQuery = suggestion
@@ -122,10 +127,10 @@ struct KeyEventHandlingView: NSViewRepresentable {
 class KeyHandlerView: NSView {
     var appStore: AppStore?
     
-    override var acceptsFirstResponder: Bool { true }
+    override var acceptsFirstResponder: Bool { false } // Don't accept first responder
     
-    override func keyDown(with event: NSEvent) {
-        guard let appStore = appStore else { return }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let appStore = appStore else { return false }
         
         // Handle special key combinations first
         let modifiers = event.modifierFlags
@@ -133,54 +138,57 @@ class KeyHandlerView: NSView {
         // Command + Escape: Always return to search widget
         if event.keyCode == 53 && modifiers.contains(.command) {
             appStore.switchToWidget(.search)
-            return
-        }
-        
-        // Escape key: Progressive back navigation
-        if event.keyCode == 53 {
-            if appStore.selectedWidget != .search {
-                // If in another widget, go back to search
-                appStore.switchToWidget(.search)
-            } else if !appStore.searchQuery.isEmpty {
-                // If in search with query, clear query
-                appStore.searchQuery = ""
-            } else {
-                // If in search with empty query, close panel
-                PanelManager.shared.hideWindow()
-            }
-            return
-        }
-        
-        // Arrow key navigation and Enter (prioritize over text field when results exist)
-        if appStore.selectedWidget == .search && !appStore.searchResults.isEmpty {
-            switch event.keyCode {
-            case 126: // Up arrow
-                appStore.selectPreviousResult()
-                return
-            case 125: // Down arrow
-                appStore.selectNextResult()
-                return
-            case 36: // Enter key
-                appStore.executeCommand()
-                return
-            default:
-                break
-            }
+            return true
         }
         
         // Command + W: Close window (Raycast pattern)
         if event.keyCode == 13 && modifiers.contains(.command) { // W key
             PanelManager.shared.hideWindow()
-            return
+            return true
         }
         
         // Command + Comma: Open settings (Raycast pattern)
         if event.keyCode == 43 && modifiers.contains(.command) { // Comma key
             appStore.switchToWidget(.settings)
-            return
+            return true
         }
         
-        super.keyDown(with: event)
+        // For non-command keys, check if we should handle them
+        if !modifiers.contains(.command) {
+            // Escape key: Progressive back navigation
+            if event.keyCode == 53 {
+                if appStore.selectedWidget != .search {
+                    // If in another widget, go back to search
+                    appStore.switchToWidget(.search)
+                } else if !appStore.searchQuery.isEmpty {
+                    // If in search with query, clear query
+                    appStore.searchQuery = ""
+                } else {
+                    // If in search with empty query, close panel
+                    PanelManager.shared.hideWindow()
+                }
+                return true
+            }
+            
+            // Arrow key navigation and Enter (prioritize over text field when results exist)
+            if appStore.selectedWidget == .search && !appStore.searchResults.isEmpty {
+                switch event.keyCode {
+                case 126: // Up arrow
+                    appStore.selectPreviousResult()
+                    return true
+                case 125: // Down arrow
+                    appStore.selectNextResult()
+                    return true
+                case 36: // Enter key
+                    appStore.executeCommand()
+                    return true
+                default:
+                    break
+                }
+            }
+        }
+        
+        return super.performKeyEquivalent(with: event)
     }
 }
 

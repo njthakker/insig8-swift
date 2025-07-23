@@ -66,7 +66,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "command", accessibilityDescription: "Insig8")
             button.action = #selector(showMenuBarDropdown)
             button.target = self
-            button.sendAction(on: [.leftMouseUp])
             print("Menu bar item set up with dropdown menu")
         } else {
             print("Failed to get status item button")
@@ -81,11 +80,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func showMenuBarDropdown() {
+        // Create menu and set it immediately before showing
         let menu = NSMenu()
+        menu.autoenablesItems = false
         
         // Command Palette option
         let commandPaletteItem = NSMenuItem(title: "Open Command Palette", action: #selector(openCommandPalette), keyEquivalent: "")
         commandPaletteItem.target = self
+        commandPaletteItem.isEnabled = true
         menu.addItem(commandPaletteItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -93,14 +95,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Quick access widgets
         let calendarItem = NSMenuItem(title: "View Calendar Events", action: #selector(openCalendarWidget), keyEquivalent: "")
         calendarItem.target = self
+        calendarItem.isEnabled = true
         menu.addItem(calendarItem)
         
         let clipboardItem = NSMenuItem(title: "Clipboard History", action: #selector(openClipboardWidget), keyEquivalent: "")
         clipboardItem.target = self
+        clipboardItem.isEnabled = true
         menu.addItem(clipboardItem)
         
         let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettingsWidget), keyEquivalent: ",")
         settingsItem.target = self
+        settingsItem.isEnabled = true
         menu.addItem(settingsItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -108,16 +113,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // App controls
         let aboutItem = NSMenuItem(title: "About Insig8", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
+        aboutItem.isEnabled = true
         menu.addItem(aboutItem)
         
         let quitItem = NSMenuItem(title: "Quit Insig8", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
+        quitItem.isEnabled = true
         menu.addItem(quitItem)
         
-        // Show the menu
-        statusItem?.menu = menu
-        statusItem?.button?.performClick(nil)
-        statusItem?.menu = nil // Remove menu after showing to allow click behavior
+        // Show the menu at the status item position
+        if let button = statusItem?.button {
+            statusItem?.menu = menu
+            button.performClick(nil)
+            
+            // Schedule removal of menu after showing
+            DispatchQueue.main.async { [weak self] in
+                self?.statusItem?.menu = nil
+            }
+        }
     }
     
     @objc private func openCommandPalette() {

@@ -279,10 +279,10 @@ struct EnhancedSearchInput: View {
     let placeholder: String
     let leadingIcon: String
     let suggestions: [String]
+    @FocusState.Binding var isFocused: Bool
     let onSuggestionTap: ((String) -> Void)?
     let onSubmit: (() -> Void)?
     
-    @FocusState var isFocused: Bool
     @State private var showSuggestions = false
     
     var body: some View {
