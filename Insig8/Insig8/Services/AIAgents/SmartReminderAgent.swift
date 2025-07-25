@@ -35,10 +35,10 @@ class SmartReminderAgent {
             content: item.content,
             source: item.source,
             tags: tags,
-            urgencyLevel: .urgent,
+            urgencyLevel: ProcessingPriority.urgent,
             reminderTime: Date().addingTimeInterval(300), // 5 minutes for urgent
             createdAt: Date(),
-            status: .pending
+            status: ReminderStatus.active
         )
         
         activeReminders[reminderTask.id] = reminderTask
@@ -51,9 +51,9 @@ class SmartReminderAgent {
             id: reminderTask.id,
             description: "URGENT: \(generateReminderDescription(for: reminderTask))",
             source: item.source,
-            tags: [.urgent_action, .reminder] + tags,
-            priority: .urgent,
-            status: .pending,
+            tags: [ContentTag.urgent_action, ContentTag.reminder] + tags,
+            priority: ProcessingPriority.urgent,
+            status: TaskStatus.pending,
             dueDate: reminderTask.reminderTime,
             createdDate: Date(),
             modifiedDate: Date(),
@@ -75,7 +75,7 @@ class SmartReminderAgent {
             urgencyLevel: determineUrgencyLevel(from: tags),
             reminderTime: reminderTime,
             createdAt: Date(),
-            status: .pending
+            status: ReminderStatus.active
         )
         
         activeReminders[reminderTask.id] = reminderTask
@@ -88,9 +88,9 @@ class SmartReminderAgent {
             id: reminderTask.id,
             description: generateReminderDescription(for: reminderTask),
             source: item.source,
-            tags: [.reminder] + tags,
+            tags: [ContentTag.reminder] + tags,
             priority: reminderTask.urgencyLevel,
-            status: .pending,
+            status: TaskStatus.pending,
             dueDate: reminderTime,
             createdDate: Date(),
             modifiedDate: Date(),
@@ -108,11 +108,11 @@ class SmartReminderAgent {
             originalItemId: UUID(), // New ID for followup
             content: "Follow up on commitment: \(commitment)",
             source: originalSource,
-            tags: [.commitment, .followup_required],
-            urgencyLevel: .high,
+            tags: [ContentTag.commitment, ContentTag.followup_required],
+            urgencyLevel: ProcessingPriority.high,
             reminderTime: followupTime,
             createdAt: Date(),
-            status: .pending
+            status: ReminderStatus.active
         )
         
         activeReminders[reminderTask.id] = reminderTask
@@ -125,9 +125,9 @@ class SmartReminderAgent {
             id: reminderTask.id,
             description: "Follow up with \(recipient): \(commitment)",
             source: originalSource,
-            tags: [.commitment, .followup_required, .reminder],
-            priority: .high,
-            status: .pending,
+            tags: [ContentTag.commitment, ContentTag.followup_required, ContentTag.reminder],
+            priority: ProcessingPriority.high,
+            status: TaskStatus.pending,
             dueDate: followupTime,
             createdDate: Date(),
             modifiedDate: Date(),
@@ -141,7 +141,7 @@ class SmartReminderAgent {
         let content = UNMutableNotificationContent()
         content.title = getReminderTitle(for: reminder)
         content.body = reminder.content.count > 100 ? String(reminder.content.prefix(97)) + "..." : reminder.content
-        content.sound = reminder.urgencyLevel == .urgent ? .defaultCritical : .default
+        content.sound = reminder.urgencyLevel == ProcessingPriority.urgent ? .defaultCritical : .default
         content.categoryIdentifier = "REMINDER_CATEGORY"
         
         // Add action buttons
@@ -198,15 +198,15 @@ class SmartReminderAgent {
         let now = Date()
         
         for (_, reminder) in activeReminders {
-            if reminder.status == .pending && now > reminder.reminderTime.addingTimeInterval(3600) { // 1 hour overdue
+            if reminder.status == ReminderStatus.active && now > reminder.reminderTime.addingTimeInterval(3600) { // 1 hour overdue
                 // Create escalated reminder
                 let escalatedTask = AITask(
                     id: UUID(),
                     description: "OVERDUE REMINDER: \(generateReminderDescription(for: reminder))",
                     source: reminder.source,
-                    tags: [.urgent_action, .reminder] + reminder.tags,
-                    priority: .urgent,
-                    status: .pending,
+                    tags: [ContentTag.urgent_action, ContentTag.reminder] + reminder.tags,
+                    priority: ProcessingPriority.urgent,
+                    status: TaskStatus.pending,
                     dueDate: now,
                     createdDate: now,
                     modifiedDate: now,
@@ -216,7 +216,7 @@ class SmartReminderAgent {
                 delegate?.agentDidCreateTask(escalatedTask)
                 
                 // Mark original as escalated
-                activeReminders[reminder.id]?.status = .escalated
+                activeReminders[reminder.id]?.status = ReminderStatus.active
                 
                 logger.warning("Escalated overdue reminder: \(reminder.id)")
             }
@@ -225,7 +225,7 @@ class SmartReminderAgent {
     
     private func cleanupCompletedReminders() {
         let completedIds = activeReminders.compactMap { (id, reminder) in
-            reminder.status == .completed || reminder.status == .dismissed ? id : nil
+            reminder.status == ReminderStatus.completed || reminder.status == ReminderStatus.dismissed ? id : nil
         }
         
         for id in completedIds {
@@ -244,14 +244,14 @@ class SmartReminderAgent {
     
     func completeReminder(_ reminderId: UUID) {
         if activeReminders[reminderId] != nil {
-            activeReminders[reminderId]?.status = .completed
+            activeReminders[reminderId]?.status = ReminderStatus.completed
             logger.info("Completed reminder: \(reminderId)")
         }
     }
     
     func dismissReminder(_ reminderId: UUID) {
         if activeReminders[reminderId] != nil {
-            activeReminders[reminderId]?.status = .dismissed
+            activeReminders[reminderId]?.status = ReminderStatus.dismissed
             logger.info("Dismissed reminder: \(reminderId)")
         }
     }
@@ -259,7 +259,7 @@ class SmartReminderAgent {
     func snoozeReminder(_ reminderId: UUID, until: Date) async {
         if var reminder = activeReminders[reminderId] {
             reminder.reminderTime = until
-            reminder.status = .snoozed
+            reminder.status = ReminderStatus.snoozed
             activeReminders[reminderId] = reminder
             
             // Reschedule notification
@@ -270,7 +270,7 @@ class SmartReminderAgent {
     }
     
     func getActiveReminders() -> [SmartReminderTask] {
-        return Array(activeReminders.values.filter { $0.status == .pending || $0.status == .snoozed })
+        return Array(activeReminders.values).filter { $0.status == ReminderStatus.active || $0.status == ReminderStatus.snoozed }
     }
     
     // MARK: - Helper Methods
@@ -332,10 +332,4 @@ struct SmartReminderTask {
     var status: ReminderStatus
 }
 
-enum ReminderStatus: String, Codable {
-    case pending = "pending"
-    case snoozed = "snoozed"
-    case completed = "completed"
-    case dismissed = "dismissed"
-    case escalated = "escalated"
-}
+// ReminderStatus is defined in ReminderManagerAgent.swift

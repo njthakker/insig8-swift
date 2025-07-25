@@ -47,7 +47,9 @@ struct SearchInputView: View {
                 appStore.performFullSearchOnEnter(appStore.searchQuery)
                 // Small delay to let the AI search complete before executing
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    appStore.executeCommand()
+                    Task {
+                        await appStore.executeCommand()
+                    }
                 }
             }
         )
@@ -122,6 +124,8 @@ struct WidgetContentView: View {
                 }
             case .aiMonitor:
                 AIMonitorWidget()
+            case .meeting:
+                MeetingWidgetView()
             default:
                 EmptyView()
             }
@@ -198,7 +202,9 @@ class KeyHandlerView: NSView {
                     appStore.selectNextResult()
                     return true
                 case 36: // Enter key
-                    appStore.executeCommand()
+                    Task {
+                        await appStore.executeCommand()
+                    }
                     return true
                 default:
                     break

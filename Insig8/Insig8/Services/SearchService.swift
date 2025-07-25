@@ -221,7 +221,12 @@ class SearchService: ObservableObject {
             ("Lock Screen", "Lock the screen", "lock", .lockScreen),
             ("Log Out", "Log out current user", "person.crop.circle.badge.xmark", .logOut),
             ("Restart", "Restart the system", "arrow.clockwise", .restart),
-            ("Shut Down", "Shut down the system", "power", .shutdown)
+            ("Shut Down", "Shut down the system", "power", .shutdown),
+            // Meeting Actions
+            ("Start Meeting", "Start recording a new meeting", "record.circle", .startMeeting),
+            ("Stop Meeting", "Stop current meeting recording", "stop.circle", .stopMeeting),
+            ("Meeting Summary", "Generate summary of current meeting", "doc.text", .generateMeetingSummary),
+            ("Enroll Speaker", "Add a new speaker profile", "person.crop.circle.badge.plus", .enrollSpeaker)
         ]
         
         let lowercaseQuery = query.lowercased()
@@ -301,7 +306,7 @@ class SearchService: ObservableObject {
     
     // MARK: - Widget Navigation
     private func searchWidgets(query: String) async -> [SearchResult] {
-        let widgets = [
+        let baseWidgets = [
             ("Calendar", "calendar", "View calendar events and schedule", "calendar"),
             ("Clipboard Manager", "clipboard", "View and manage clipboard history", "doc.on.clipboard"),
             ("Settings", "settings", "App preferences and configuration", "gear"),
@@ -311,24 +316,48 @@ class SearchService: ObservableObject {
             ("Network Info", "network", "View network information and status", "wifi")
         ]
         
+        // Always include meeting widgets - make them persistent
+        let meetingWidgets: [(String, String, String, String)] = [
+            ("Meeting Transcription", "meeting", "Record and transcribe meetings with AI", "video"),
+            ("Meeting Summary", "meeting", "Generate and view meeting summaries", "doc.text"),
+            ("Start Meeting", "meeting", "Begin a new meeting recording session", "record.circle"),
+            ("Meeting History", "meeting", "View past meeting recordings and summaries", "clock"),
+            ("Live Meeting", "meeting", "Current meeting session", "record.circle")
+        ]
+        
+        let allWidgets = baseWidgets + meetingWidgets
+        
         let lowercasedQuery = query.lowercased()
         var results: [SearchResult] = []
         
-        for (title, key, description, icon) in widgets {
-            if title.lowercased().contains(lowercasedQuery) || 
-               key.lowercased().contains(lowercasedQuery) ||
-               description.lowercased().contains(lowercasedQuery) {
-                
+        for (title, key, description, icon) in allWidgets {
+            // More flexible matching for meeting widgets
+            let matchesQuery = title.lowercased().contains(lowercasedQuery) || 
+                              key.lowercased().contains(lowercasedQuery) ||
+                              description.lowercased().contains(lowercasedQuery)
+            
+            let matchesMeetingTerms = lowercasedQuery.contains("summary") ||
+                                     lowercasedQuery.contains("transcript") ||
+                                     lowercasedQuery.contains("recording") ||
+                                     lowercasedQuery.contains("meet") ||
+                                     lowercasedQuery.contains("live") ||
+                                     lowercasedQuery.contains("history")
+            
+            // Always show meeting widgets if query is meeting-related or matches title
+            if matchesQuery || (key == "meeting" && matchesMeetingTerms) {
                 let relevanceScore = calculateRelevanceScore(text: title, query: query)
                 
+                // Boost meeting-related results more aggressively
+                let boost = (key == "meeting") ? 0.5 : 0.2
+                
                 results.append(SearchResult(
-                    id: "widget_\(key)",
+                    id: "widget_\(key)_\(title.replacingOccurrences(of: " ", with: "_"))",
                     title: title,
                     subtitle: description,
                     icon: icon,
                     type: .custom("widget"),
                     action: .switchToWidget(WidgetType(rawValue: key) ?? .search),
-                    relevanceScore: relevanceScore + 0.2 // Boost widget results
+                    relevanceScore: relevanceScore + boost
                 ))
             }
         }
@@ -474,6 +503,26 @@ class SearchService: ObservableObject {
                 
             case .custom(let identifier):
                 print("Custom action: \(identifier)")
+                
+            // Meeting Actions
+            case .startMeeting:
+                AppStore.shared.switchToWidget(.meeting)
+                Task {
+                    try? await AppStore.shared.meetingService.startMeeting()
+                }
+                
+            case .stopMeeting:
+                Task {
+                    try? await AppStore.shared.meetingService.stopMeeting()
+                }
+                
+            case .generateMeetingSummary:
+                AppStore.shared.switchToWidget(.meeting)
+                // Summary generation is handled in the service
+                
+            case .enrollSpeaker:
+                AppStore.shared.switchToWidget(.meeting)
+                // Speaker enrollment is handled in the UI
             }
         }
     }

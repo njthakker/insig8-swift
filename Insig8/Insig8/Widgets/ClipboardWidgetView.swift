@@ -7,7 +7,6 @@ struct ClipboardWidgetView: View {
     @StateObject private var clipboardStore = ClipboardStore()
     @EnvironmentObject var appStore: AppStore
     @State private var aiEnhancements: [String: ClipboardEnhancement] = [:]
-    @StateObject private var vectorDB = VectorDatabaseService()
     
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +55,9 @@ struct ClipboardWidgetView: View {
     
     // Vector Database Integration (Legacy - kept for compatibility)
     private func addItemsToVectorDatabase(_ history: [ClipboardItem]) {
+        // Use the vector database from appStore instead of creating a separate instance
+        let vectorDB = appStore.vectorDB
+        
         for item in history.prefix(5) { // Add recent items to vector DB
             switch item.content {
             case .url(let urlString):
@@ -451,6 +453,7 @@ class ClipboardStore: ObservableObject {
                 self.checkPasteboard()
             }
         }
+        print("Clipboard monitoring started successfully")
     }
     
     private func checkPasteboard() {
@@ -549,13 +552,20 @@ class ClipboardStore: ObservableObject {
     }
     
     private func loadHistory() {
-        guard let data = UserDefaults.standard.data(forKey: "ClipboardHistory"),
-              let decodedHistory = try? JSONDecoder().decode([ClipboardItemData].self, from: data) else {
-            return
-        }
-        
-        self.history = decodedHistory.compactMap { itemData in
-            ClipboardItem(content: itemData.content, date: itemData.date)
+        do {
+            guard let data = UserDefaults.standard.data(forKey: "ClipboardHistory") else {
+                print("No existing clipboard history found")
+                return
+            }
+            
+            let decodedHistory = try JSONDecoder().decode([ClipboardItemData].self, from: data)
+            self.history = decodedHistory.compactMap { itemData in
+                ClipboardItem(content: itemData.content, date: itemData.date)
+            }
+            print("Loaded \(self.history.count) clipboard items from history")
+        } catch {
+            print("Failed to load clipboard history: \(error.localizedDescription)")
+            self.history = []
         }
     }
     

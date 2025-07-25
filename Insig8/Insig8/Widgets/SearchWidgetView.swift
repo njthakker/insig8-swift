@@ -32,7 +32,9 @@ struct SearchResultsListView: View {
                 )
                 .onTapGesture {
                     appStore.selectedIndex = index
-                    appStore.executeCommand()
+                    Task {
+                        await appStore.executeCommand()
+                    }
                 }
             }
             .listStyle(.plain)
@@ -51,7 +53,9 @@ struct SearchResultsListView: View {
             return .handled
         }
         .onKeyPress(.return) {
-            appStore.executeCommand()
+            Task {
+                await appStore.executeCommand()
+            }
             return .handled
         }
     }

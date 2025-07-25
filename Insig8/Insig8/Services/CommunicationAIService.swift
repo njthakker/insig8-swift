@@ -14,7 +14,7 @@ class CommunicationAIService: ObservableObject {
     
     // Published state
     @Published var activeCommitments: [Commitment] = []
-    @Published var pendingReminders: [SmartReminder] = []
+    @Published var pendingReminders: [CommCommSmartReminder] = []
     @Published var emailThreads: [EmailThread] = []
     @Published var isProcessing = false
     
@@ -281,14 +281,14 @@ class CommunicationAIService: ObservableObject {
     // MARK: - Smart Reminders
     
     private func scheduleReminder(for commitment: Commitment) {
-        let reminder = SmartReminder(
+        let reminder = CommCommSmartReminder(
             id: UUID(),
             commitmentId: commitment.id,
             title: "Commitment Reminder",
             message: "Don't forget: \(commitment.text)",
             scheduledDate: calculateReminderDate(for: commitment),
             priority: commitment.priority,
-            type: .commitment
+            type: CommReminderType.commitment
         )
         
         pendingReminders.append(reminder)
@@ -327,7 +327,7 @@ class CommunicationAIService: ObservableObject {
         }
     }
     
-    private func scheduleNotification(for reminder: SmartReminder) {
+    private func scheduleNotification(for reminder: CommCommSmartReminder) {
         let content = UNMutableNotificationContent()
         content.title = reminder.title
         content.body = reminder.message
@@ -480,7 +480,7 @@ class CommunicationAIService: ObservableObject {
         }
         
         if let remindersData = UserDefaults.standard.data(forKey: "PendingReminders"),
-           let loadedReminders = try? decoder.decode([SmartReminder].self, from: remindersData) {
+           let loadedReminders = try? decoder.decode([CommCommSmartReminder].self, from: remindersData) {
             pendingReminders = loadedReminders
         }
     }
@@ -576,17 +576,17 @@ enum ActionItemSource: String, Codable, CaseIterable {
     case manual = "manual"
 }
 
-struct SmartReminder: Codable, Identifiable {
+struct CommCommSmartReminder: Codable, Identifiable {
     let id: UUID
     let commitmentId: UUID
     let title: String
     let message: String
     let scheduledDate: Date
     let priority: Priority
-    let type: ReminderType
+    let type: CommReminderType
 }
 
-enum ReminderType: String, Codable, CaseIterable {
+enum CommReminderType: String, Codable, CaseIterable {
     case commitment = "commitment"
     case followUp = "follow_up"
     case deadline = "deadline"

@@ -74,6 +74,11 @@ struct SearchResult: Identifiable, Codable, Equatable {
         case switchToWidget(WidgetType)
         case performSearch(String)
         case custom(String)
+        // Meeting Actions
+        case startMeeting
+        case stopMeeting
+        case generateMeetingSummary
+        case enrollSpeaker
         
         var description: String {
             switch self {
@@ -94,6 +99,11 @@ struct SearchResult: Identifiable, Codable, Equatable {
             case .switchToWidget: return "Switch to Widget"
             case .performSearch: return "Perform Search"
             case .custom(let action): return action
+            // Meeting Actions
+            case .startMeeting: return "Start Meeting"
+            case .stopMeeting: return "Stop Meeting"
+            case .generateMeetingSummary: return "Generate Summary"
+            case .enrollSpeaker: return "Enroll Speaker"
             }
         }
     }

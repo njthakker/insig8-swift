@@ -380,6 +380,29 @@ class EnhancedVectorDatabaseService: ObservableObject {
     var vectorCount: Int {
         taggedVectors.count
     }
+    
+    // MARK: - Optimization
+    
+    func optimize() async {
+        // Remove duplicate vectors
+        var uniqueVectors: [TaggedVector] = []
+        var contentHashes: Set<String> = []
+        
+        for vector in taggedVectors {
+            let contentHash = vector.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !contentHashes.contains(contentHash) {
+                contentHashes.insert(contentHash)
+                uniqueVectors.append(vector)
+            }
+        }
+        
+        taggedVectors = uniqueVectors
+        
+        // Save optimized database
+        saveVectorDatabase()
+        
+        logger.info("Optimized vector database: \(self.taggedVectors.count) unique vectors")
+    }
 }
 
 // MARK: - Data Models

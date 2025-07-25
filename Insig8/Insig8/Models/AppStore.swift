@@ -16,6 +16,7 @@ enum WidgetType: String, CaseIterable, Codable {
     case networkInfo = "networkInfo"
     case shortcuts = "shortcuts"
     case aiMonitor = "aiMonitor"
+    case meeting = "meeting"
 }
 
 // Main app state management - replacing MobX UIStore
@@ -52,17 +53,30 @@ class AppStore: ObservableObject {
     
     // Services
     let searchService = SearchService()
-    let aiPipeline = AIProcessingPipeline() // New comprehensive AI pipeline
+    
+    #if !MEETING_ONLY
+    let aiPipeline = AIProcessingPipeline() // DISABLED: Transcription-only build
+    #endif
     
     // Production infrastructure
     let sqliteVectorDB = SQLiteVectorDatabase()
     let secureStorage = SecureAIStorage()
-    let screenCapture = ScreenCaptureService()
+    
+    #if !MEETING_ONLY
+    let screenCapture = ScreenCaptureService() // DISABLED: Transcription-only build
+    #endif
     
     // New AI services for scenario coverage
     lazy private(set) var actionManager = ActionManager(sqliteDB: sqliteVectorDB, secureStorage: secureStorage)
-    lazy private(set) var audioCapture = AudioCaptureService()
+    
+    #if !MEETING_ONLY
+    lazy private(set) var audioCapture = AudioCaptureService() // DISABLED: Transcription-only build
+    #endif
+    
     lazy private(set) var appFocusMonitor = AppFocusMonitor(appStore: self)
+    
+    // Meeting Service (Phase 1 - Clean Implementation)
+    lazy private(set) var meetingService = MeetingService()
     
     // Legacy services for compatibility (will be phased out)
     let aiService = AppleIntelligenceService()
@@ -124,33 +138,35 @@ class AppStore: ObservableObject {
             // Initialize SQLite vector database
             do {
                 try await sqliteVectorDB.initialize()
-                print("✅ SQLite vector database initialized with \(sqliteVectorDB.totalVectors) vectors")
+                AppConfig.log("SQLite vector database initialized with \(sqliteVectorDB.totalVectors) vectors")
                 
                 // Migrate existing vectors from UserDefaults if needed
                 await migrateVectorsToSQLite()
             } catch {
-                print("❌ Failed to initialize SQLite vector database: \(error)")
+                AppConfig.log("Failed to initialize SQLite vector database: \(error)", level: .error)
             }
             
             // Initialize secure storage
             do {
                 let _ = try await secureStorage.getDatabaseKey()
-                print("✅ Secure storage initialized with encryption key")
+                AppConfig.log("Secure storage initialized with encryption key")
                 
                 // Apply data retention policy
                 if let db = try? secureStorage.openEncryptedDatabase(at: sqliteVectorDB.dbPath) {
                     try? await secureStorage.applyDataRetentionPolicy(on: db)
                 }
             } catch {
-                print("❌ Failed to initialize secure storage: \(error)")
+                AppConfig.log("Failed to initialize secure storage: \(error)", level: .error)
             }
             
-            // Initialize screen capture if permission granted
-            if screenCapture.permissionGranted {
+            // Initialize screen capture only if enabled and permission granted
+            if AppConfig.enableScreenCapture && screenCapture.permissionGranted {
                 try? await screenCapture.startMonitoring()
-                print("✅ Screen capture monitoring started")
+                AppConfig.log("Screen capture monitoring started")
+            } else if AppConfig.enableScreenCapture {
+                AppConfig.log("Screen capture permission not granted", level: .warning)
             } else {
-                print("⚠️ Screen capture permission not granted")
+                AppConfig.log("Meeting-only mode: Screen capture disabled")
             }
         }
     }
@@ -163,7 +179,7 @@ class AppStore: ObservableObject {
         
         guard !allVectors.isEmpty else { return }
         
-        print("🔄 Migrating \(allVectors.count) vectors to SQLite...")
+        AppConfig.log("Migrating \(allVectors.count) vectors to SQLite...", level: .debug)
         
         var migrationBatch: [(id: String, content: String, embedding: [Float], source: ContentSource, tags: [ContentTag], metadata: [String: Any])] = []
         
@@ -189,13 +205,18 @@ class AppStore: ObservableObject {
             try? await sqliteVectorDB.batchInsertVectors(migrationBatch)
         }
         
-        print("✅ Migration complete: \(allVectors.count) vectors migrated to SQLite")
+        AppConfig.log("Migration complete: \(allVectors.count) vectors migrated to SQLite", level: .debug)
     }
     
     // MARK: - Action Integration Setup
     
     private func setupActionIntegration() {
-        // Set up screen capture to feed into action manager
+        // Set up screen capture to feed into action manager (only if enabled)
+        guard AppConfig.enableScreenCapture else {
+            AppConfig.log("Meeting-only mode: Action integration disabled")
+            return
+        }
+        
         Task {
             // Connect screen capture data to action manager
             await connectScreenCaptureToActions()
@@ -208,17 +229,22 @@ class AppStore: ObservableObject {
     private func connectScreenCaptureToActions() async {
         // This would be implemented with proper observers/delegates
         // For now, we simulate the connection
-        print("🔗 Connected screen capture to action manager")
+        AppConfig.log("Connected screen capture to action manager", level: .debug)
     }
     
     private func connectAudioCaptureToActions() async {
         // This would be implemented with proper observers/delegates
         // For now, we simulate the connection
-        print("🔗 Connected audio capture to action manager")
+        AppConfig.log("Connected audio capture to action manager", level: .debug)
     }
     
     private func setupClipboardMonitoring() {
-        // Monitor clipboard changes and automatically ingest content
+        // Monitor clipboard changes only if enabled (disabled in meeting-only mode)
+        guard AppConfig.enableClipboardMonitoring else {
+            AppConfig.log("Meeting-only mode: Clipboard monitoring disabled")
+            return
+        }
+        
         var lastChangeCount = NSPasteboard.general.changeCount
         
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -237,17 +263,23 @@ class AppStore: ObservableObject {
             }
         }
         
-        print("🔗 Started global clipboard monitoring")
+        AppConfig.log("Started global clipboard monitoring", level: .debug)
     }
     
     private func setupAppFocusMonitoring() {
+        // Start app focus monitoring only if enabled (disabled in meeting-only mode)
+        guard AppConfig.enableAppFocusMonitoring else {
+            AppConfig.log("Meeting-only mode: App focus monitoring disabled")
+            return
+        }
+        
         // Load monitored apps from preferences
         appFocusMonitor.loadMonitoredApps()
         
         // Start monitoring app focus changes
         appFocusMonitor.startMonitoring()
         
-        print("🔗 Started app focus monitoring")
+        AppConfig.log("Started app focus monitoring", level: .debug)
     }
     
     @MainActor
@@ -267,7 +299,7 @@ class AppStore: ObservableObject {
             vectorDB.addClipboardContent(content, type: .text, timestamp: Date())
         }
         
-        print("📋 Stored clipboard content: \(String(content.prefix(50)))...")
+        AppConfig.log("Stored clipboard content: \(String(content.prefix(50)))...", level: .debug)
     }
     
     func performBasicSearch(_ query: String) {
@@ -349,6 +381,7 @@ class AppStore: ObservableObject {
                     }
                 }
                 
+                #if !MEETING_ONLY
                 // Add AI pipeline search results (replaces vector database search)
                 let aiResults = await aiPipeline.queryAI(query)
                 for aiResult in aiResults {
@@ -363,6 +396,7 @@ class AppStore: ObservableObject {
                     )
                     results.append(searchResult)
                 }
+                #endif
                 
                 // Use production SQLite database for semantic search
                 if sqliteVectorDB.isInitialized {
@@ -502,7 +536,8 @@ class AppStore: ObservableObject {
         performFullSearchOnEnter(query)
     }
     
-    func executeCommand() {
+    // Changed to async because we now await MainActor changes inside
+    func executeCommand() async {
         guard selectedIndex < searchResults.count else { return }
         let result = searchResults[selectedIndex]
         
@@ -523,9 +558,12 @@ class AppStore: ObservableObject {
         searchService.executeAction(result.action)
         
         // Clear search after execution (except for widget switches and search suggestions)
-        searchQuery = ""
-        searchResults = []
-        selectedIndex = 0
+        // Wrapped in MainActor.run to ensure UI updates happen on the main thread since executeCommand is async now
+        DispatchQueue.main.async {
+            self.searchQuery = ""
+            self.searchResults = []
+            self.selectedIndex = 0
+        }
     }
     
     func selectPreviousResult() {
@@ -563,7 +601,9 @@ class AppStore: ObservableObject {
         // Only process screen content if AI monitoring and screen content monitoring are enabled
         guard enableAIMonitoring && monitorScreenContent else { return }
         
+        #if !MEETING_ONLY
         aiPipeline.ingestScreenCapture(ocrText, appName: appName)
+        #endif
     }
     
     /// Ingest audio transcript data from meetings and app audio (only if enabled in settings)
@@ -571,7 +611,9 @@ class AppStore: ObservableObject {
         // Only process audio transcripts if AI monitoring and audio transcript monitoring are enabled
         guard enableAIMonitoring && monitorAudioTranscripts else { return }
         
+        #if !MEETING_ONLY
         aiPipeline.ingestMeetingTranscript(transcript, participants: participants)
+        #endif
     }
     
     /// Ingest keyboard input for commitment/action detection (only if enabled in settings)
@@ -579,38 +621,56 @@ class AppStore: ObservableObject {
         // Only process keyboard input if AI monitoring and keyboard input monitoring are enabled
         guard enableAIMonitoring && monitorKeyboardInput else { return }
         
+        #if !MEETING_ONLY
         // Use screen capture ingestion method as keyboard input is similar to screen text
         aiPipeline.ingestScreenCapture(text, appName: appName)
+        #endif
     }
     
     /// Ingest email content for processing
     func ingestEmailContent(_ content: String, sender: String?, subject: String?) {
+        #if !MEETING_ONLY
         aiPipeline.ingestEmailContent(content, sender: sender, subject: subject)
+        #endif
     }
     
     /// Ingest browser history for context
     func ingestBrowserHistory(_ url: String, title: String?) {
+        #if !MEETING_ONLY
         aiPipeline.ingestBrowserHistory(url, title: title)
+        #endif
     }
     
     /// Ingest meeting transcripts
     func ingestMeetingTranscript(_ transcript: String, participants: [String]) {
+        #if !MEETING_ONLY
         aiPipeline.ingestMeetingTranscript(transcript, participants: participants)
+        #endif
     }
     
     /// Get active AI tasks for display
     func getActiveTasks() -> [AITask] {
+        #if !MEETING_ONLY
         return aiPipeline.getActiveTasks()
+        #else
+        return []
+        #endif
     }
     
     /// Modify AI task (snooze, dismiss, etc.)
     func modifyTask(_ taskId: UUID, modification: TaskModification) {
+        #if !MEETING_ONLY
         aiPipeline.modifyTask(taskId, modification: modification)
+        #endif
     }
     
     /// Get pipeline statistics for monitoring
     func getPipelineStatistics() -> PipelineStatistics {
+        #if !MEETING_ONLY
         return aiPipeline.getPipelineStatistics()
+        #else
+        return PipelineStatistics(totalItemsProcessed: 0, itemsFiltered: 0, itemsPassed: 0, filterEfficiency: 0, vectorDatabaseSize: 0, activeTasks: 0, completedTasks: 0, urgentTasks: 0, overdueeTasks: 0)
+        #endif
     }
     
     // MARK: - Helper Methods
@@ -687,8 +747,10 @@ extension Int {
 extension AppStore {
     func ingestScreenCaptureData(_ ocrText: String, appName: String) {
         Task {
+            #if !MEETING_ONLY
             // Send to AI pipeline for processing
             aiPipeline.ingestScreenCapture(ocrText, appName: appName)
+            #endif
             
             // Store in SQLite database if initialized
             if sqliteVectorDB.isInitialized {
@@ -718,6 +780,7 @@ extension AppStore {
     }
     
     func toggleScreenMonitoring() {
+        #if !MEETING_ONLY
         Task {
             if screenCapture.isMonitoring {
                 await screenCapture.stopMonitoring()
@@ -731,9 +794,11 @@ extension AppStore {
                 }
             }
         }
+        #endif
     }
     
     func updateScreenCaptureApps(_ apps: Set<String>) {
+        #if !MEETING_ONLY
         screenCapture.monitoredApps = apps
         
         // Restart monitoring with new app list
@@ -743,5 +808,7 @@ extension AppStore {
                 try? await screenCapture.startMonitoring()
             }
         }
+        #endif
     }
 }
+

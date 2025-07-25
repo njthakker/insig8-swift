@@ -701,6 +701,8 @@ extension WidgetType {
             return "shortcuts and automation"
         case .aiMonitor:
             return "AI processing monitor"
+        case .meeting:
+            return "meeting transcription and recording"
         }
     }
 }

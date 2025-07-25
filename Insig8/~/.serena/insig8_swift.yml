@@ -1,0 +1,14 @@
+project_path: /Users/neel/Desktop/Projects/insig8-swift/Insig8
+language: swift
+lsp:
+  command: xcrun
+  args: ["sourcekit-lsp"]
+ignore_paths:
+  - .build
+  - DerivedData
+  - "*.xcworkspace"
+  - "*.xcodeproj/project.xcworkspace"
+  - "*.xcodeproj/xcuserdata"
+  - Build
+  - Pods
+  - ".swiftpm"

@@ -54,7 +54,13 @@ struct AIMonitorWidget: View {
                 // Pipeline Stats Tab
                 PipelineStatsView(
                     stats: appStore.getPipelineStatistics(),
-                    agentStatus: appStore.aiPipeline.getAgentStatus()
+                    agentStatus: {
+                        #if !MEETING_ONLY
+                        return appStore.aiPipeline.getAgentStatus()
+                        #else
+                        return []
+                        #endif
+                    }()
                 )
                 .tabItem {
                     Image(systemName: "chart.bar")
@@ -74,7 +80,11 @@ struct AIMonitorWidget: View {
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
             Task { @MainActor in
                 // Get current processing items (without calling LLM)
+                #if !MEETING_ONLY
                 self.processingItems = appStore.aiPipeline.getPendingItems()
+                #else
+                self.processingItems = []
+                #endif
                 
                 // Update recent processed items (simulated for now)
                 // In production, this would come from the AI pipeline's processed items queue
@@ -85,7 +95,11 @@ struct AIMonitorWidget: View {
     
     private func updateRecentItems() {
         // Get actual processed items from the AI pipeline
+        #if !MEETING_ONLY
         let pipelineItems = appStore.aiPipeline.getRecentProcessedItems()
+        #else
+        let pipelineItems: [ProcessedItemResult] = []
+        #endif
         
         // Convert to UI model
         recentProcessedItems = pipelineItems.map { pipelineItem in

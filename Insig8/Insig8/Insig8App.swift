@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Speech
 
 @main
 struct Insig8App: App {
@@ -31,6 +32,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("App delegate launching...")
         
+        // Request permissions early for meeting transcription
+        requestMeetingPermissions()
+        
         // Initialize panel manager first
         panelManager = PanelManager.shared
         print("Panel manager initialized: \(panelManager != nil)")
@@ -54,6 +58,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         print("App delegate launch complete")
+    }
+    
+    private func requestMeetingPermissions() {
+        // Request speech recognition permission at startup
+        SFSpeechRecognizer.requestAuthorization { status in
+            DispatchQueue.main.async {
+                switch status {
+                case .authorized:
+                    print("✅ Speech recognition permission granted")
+                case .denied:
+                    print("❌ Speech recognition permission denied")
+                case .restricted:
+                    print("⚠️ Speech recognition restricted")
+                case .notDetermined:
+                    print("⚠️ Speech recognition permission not determined")
+                @unknown default:
+                    print("⚠️ Unknown speech recognition permission status")
+                }
+            }
+        }
     }
     
     private func setupMenuBarItem() {

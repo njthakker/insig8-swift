@@ -43,11 +43,13 @@
     <key>NSSystemAdministrationUsageDescription</key>
     <string>Insig8 needs administrator privileges for some system actions.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Insig8 uses speech recognition to transcribe meeting audio and voice commands for AI-powered assistance.</string>
+    <string>Insig8 uses speech recognition to transcribe meeting audio and voice commands for AI-powered assistance. On macOS 26, uses native SpeechAnalyzer for enhanced accuracy and speaker diarization.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Insig8 needs microphone access to capture and transcribe audio for meeting intelligence and voice commands.</string>
+    <string>Insig8 needs microphone access to capture and transcribe audio for meeting intelligence and voice commands. Supports dual audio capture (microphone + system audio) for comprehensive meeting transcription.</string>
     <key>NSScreenRecordingUsageDescription</key>
-    <string>Insig8 captures screen content to provide AI-powered insights and assistance with your work context.</string>
+    <string>Insig8 captures screen content and system audio to provide AI-powered insights and comprehensive meeting transcription. Required for ScreenCaptureKit dual audio capture on macOS 26.</string>
+    <key>NSFoundationModelsUsageDescription</key>
+    <string>Insig8 uses Apple's Foundation Models for on-device AI processing of meeting transcripts, generating summaries, action items, and insights while keeping all data private on your device.</string>
     <key>com.apple.security.device.audio-input</key>
     <true/>
     <key>com.apple.security.device.microphone</key>
