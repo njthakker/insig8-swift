@@ -226,6 +226,14 @@ struct MeetingContentView: View {
                     Text("Summary")
                 }
                 .tag(1)
+            
+            // Meeting History Tab
+            MeetingHistoryView(meetingService: meetingService)
+                .tabItem {
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text("History")
+                }
+                .tag(2)
         }
         .frame(height: 400)
     }
@@ -236,6 +244,7 @@ struct MeetingContentView: View {
 struct TranscriptView: View {
     @ObservedObject var meetingService: MeetingService
     @Binding var autoScroll: Bool
+    @State private var scrollTask: Task<Void, Never>?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -296,10 +305,10 @@ struct TranscriptView: View {
                     }
                     .padding()
                 }
-                .onChange(of: meetingService.finalTranscript) {
+                .onChange(of: meetingService.finalTranscript) { _, _ in
                     scrollToBottom(proxy: proxy)
                 }
-                .onChange(of: meetingService.liveTranscript) {
+                .onChange(of: meetingService.liveTranscript) { _, _ in
                     scrollToBottom(proxy: proxy)
                 }
                 .onAppear {
@@ -310,8 +319,16 @@ struct TranscriptView: View {
     }
     
     private func scrollToBottom(proxy: ScrollViewProxy) {
-        if autoScroll {
-            withAnimation(.easeInOut(duration: 0.3)) {
+        // Cancel previous scroll task to prevent rapid updates
+        scrollTask?.cancel()
+        
+        scrollTask = Task { @MainActor in
+            // Small delay to throttle scroll updates
+            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+            
+            guard !Task.isCancelled && autoScroll else { return }
+            
+            withAnimation(.easeInOut(duration: 0.2)) {
                 if meetingService.isRecording {
                     proxy.scrollTo("live", anchor: .bottom)
                 } else {
@@ -427,6 +444,42 @@ struct SummaryView: View {
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if meetingService.isGeneratingSummary {
+                    // Generating summary
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                        
+                        Text("Generating Summary")
+                            .font(.headline)
+                        
+                        Text("AI is analyzing the transcript and creating insights")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let summaryError = meetingService.summaryError {
+                    // Summary generation failed
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.orange)
+                        
+                        Text("Summary Generation Failed")
+                            .font(.headline)
+                        
+                        Text(summaryError.localizedDescription)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        Button("Retry") {
+                            retryGenerateSummary()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if !meetingService.finalTranscript.isEmpty {
                     // Has transcript but no summary yet
                     VStack(spacing: 16) {
@@ -434,10 +487,10 @@ struct SummaryView: View {
                             .font(.largeTitle)
                             .foregroundColor(.secondary)
                         
-                        Text("Processing Summary")
+                        Text("Summary Pending")
                             .font(.headline)
                         
-                        Text("Summary is being generated from the transcript")
+                        Text("Summary will be generated when the meeting ends")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -462,6 +515,24 @@ struct SummaryView: View {
                 }
             }
             .padding()
+        }
+    }
+    
+    private func retryGenerateSummary() {
+        // Trigger summary generation retry by re-generating from current transcript
+        Task {
+            let llmService = MeetingLLMService()
+            do {
+                let summary = try await llmService.summarize(meetingService.finalTranscript)
+                await MainActor.run {
+                    meetingService.meetingSummary = summary
+                    meetingService.summaryError = nil
+                }
+            } catch {
+                await MainActor.run {
+                    meetingService.summaryError = error
+                }
+            }
         }
     }
 }
@@ -602,7 +673,7 @@ struct MeetingExportView: View {
         
         if savePanel.runModal() == .OK {
             if let url = savePanel.url {
-                try? meetingService.finalTranscript.write(to: url, atomically: true, encoding: .utf8)
+                try? meetingService.finalTranscript.write(to: url, atomically: true, encoding: String.Encoding.utf8)
             }
         }
         dismiss()
@@ -630,7 +701,7 @@ struct MeetingExportView: View {
                 \(meetingService.finalTranscript)
                 """
                 
-                try? markdown.write(to: url, atomically: true, encoding: .utf8)
+                try? markdown.write(to: url, atomically: true, encoding: String.Encoding.utf8)
             }
         }
         dismiss()
@@ -641,6 +712,202 @@ struct MeetingExportView: View {
         pasteboard.clearContents()
         pasteboard.setString(meetingService.finalTranscript, forType: .string)
         dismiss()
+    }
+}
+
+// MARK: - Meeting History View
+
+struct MeetingHistoryView: View {
+    @ObservedObject var meetingService: MeetingService
+    @State private var selectedMeeting: MeetingRecord?
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            if meetingService.recentMeetings.isEmpty {
+                // No meetings yet
+                VStack(spacing: 16) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    
+                    Text("No Meeting History")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    
+                    Text("Previous meetings will appear here")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Meeting list
+                List(meetingService.recentMeetings) { meeting in
+                    MeetingHistoryRow(meeting: meeting) {
+                        selectedMeeting = meeting
+                    } onDelete: {
+                        Task {
+                            await meetingService.deleteMeeting(id: meeting.id)
+                        }
+                    }
+                    .listRowSeparator(.visible)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .sheet(item: $selectedMeeting) { meeting in
+            MeetingDetailView(meeting: meeting)
+        }
+    }
+}
+
+// MARK: - Meeting History Row
+
+struct MeetingHistoryRow: View {
+    let meeting: MeetingRecord
+    let onTap: () -> Void
+    let onDelete: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(meeting.title)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                    
+                    HStack(spacing: 12) {
+                        Label(meeting.formattedDuration, systemImage: "clock")
+                        Label("\(meeting.summary.wordCount) words", systemImage: "text.word.spacing")
+                        Label(DateFormatter.shortDate.string(from: meeting.startTime), systemImage: "calendar")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Button {
+                    onDelete()
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Delete Meeting")
+            }
+            
+            if !meeting.summary.keyDecisions.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Key Decisions:")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                    
+                    ForEach(meeting.summary.keyDecisions.prefix(2), id: \.self) { decision in
+                        Text("• \(decision)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap()
+        }
+    }
+}
+
+// MARK: - Meeting Detail View
+
+struct MeetingDetailView: View {
+    let meeting: MeetingRecord
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(meeting.title)
+                        .font(.headline)
+                    
+                    HStack(spacing: 16) {
+                        Label(meeting.formattedDuration, systemImage: "clock")
+                        Label(DateFormatter.longDateTime.string(from: meeting.startTime), systemImage: "calendar")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Button("Close") {
+                    dismiss()
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor))
+            
+            Divider()
+            
+            // Content
+            TabView {
+                // Summary Tab
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if !meeting.summary.keyDecisions.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Key Decisions")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                ForEach(meeting.summary.keyDecisions, id: \.self) { decision in
+                                    Text("• \(decision)")
+                                        .font(.body)
+                                }
+                            }
+                        }
+                        
+                        if !meeting.summary.actionItems.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Action Items")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                ForEach(meeting.summary.actionItems, id: \.self) { item in
+                                    Text("• \(item)")
+                                        .font(.body)
+                                }
+                            }
+                        }
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .tabItem {
+                    Image(systemName: "doc.text")
+                    Text("Summary")
+                }
+                
+                // Transcript Tab
+                ScrollView {
+                    Text(meeting.transcript)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .tabItem {
+                    Image(systemName: "text.bubble")
+                    Text("Transcript")
+                }
+            }
+        }
+        .frame(width: 600, height: 500)
     }
 }
 

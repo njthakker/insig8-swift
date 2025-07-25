@@ -1,17 +1,14 @@
 import SwiftUI
 import Combine
-import AVFoundation
-import Speech
 import OSLog
-import ScreenCaptureKit
-import FoundationModels
+import Observation
 
 // MARK: - Meeting Service
-// Clean Phase 1 implementation following the blueprint architecture
-// Uses actual macOS 26 APIs: SpeechAnalyzer, SpeechTranscriber, FoundationModels
+// Updated to use new architecture with MeetingAssistantController
+// Integrates ScreenCaptureKit, modern Speech APIs, and on-device AI
 
 @MainActor
-class MeetingService: NSObject, ObservableObject {
+class MeetingService: ObservableObject {
     
     // MARK: - Published Properties
     @Published var isRecording = false
@@ -19,38 +16,21 @@ class MeetingService: NSObject, ObservableObject {
     @Published var finalTranscript = ""
     @Published var meetingSummary: MeetingSummary?
     @Published var error: MeetingError?
+    @Published var isGeneratingSummary = false
+    @Published var summaryError: Error?
     
     // MARK: - Private Properties
     private let logger = Logger(subsystem: "com.insig8.meeting", category: "MeetingService")
-    
-    // Audio Capture Layer (ScreenCaptureKit)
-    private var screenStream: SCStream?
-    private var streamConfig: SCStreamConfiguration?
-    
-    // Transcription Layer (Speech APIs)
-    // Note: Using availability checks for macOS 26 APIs
-    @available(macOS 26.0, *)
-    private var speechAnalyzer: SpeechAnalyzer?
-    @available(macOS 26.0, *)
-    private var speechTranscriber: SpeechTranscriber?
-    
-    // Legacy fallback for earlier macOS versions
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var audioEngine = AVAudioEngine()
-    
-    // AI Layer (Foundation Models)
-    @available(macOS 26.0, *)
-    private var languageSession: LanguageModelSession?
+    private var controller: MeetingAssistantController?
+    private let storageService = MeetingStorageService.shared
     
     // Storage Layer
     var currentMeeting: MeetingSession?
-    private var meetingSegments: [MeetingTranscriptSegment] = []
+    private var transcriptionObserver: Task<Void, Never>?
+    private var controllerObserver: Task<Void, Never>?
     
     // MARK: - Initialization
-    override init() {
-        super.init()
+    init() {
         setupServices()
     }
     
@@ -61,6 +41,20 @@ class MeetingService: NSObject, ObservableObject {
         // SFSpeechRecognizer will automatically request permission when needed
         logger.info("Microphone permission handled by SFSpeechRecognizer on macOS")
         return true
+    }
+    
+    // MARK: - Meeting History Access
+    
+    var recentMeetings: [MeetingRecord] {
+        return storageService.recentMeetings
+    }
+    
+    func getMeeting(id: UUID) -> MeetingRecord? {
+        return storageService.getMeeting(id: id)
+    }
+    
+    func deleteMeeting(id: UUID) async {
+        await storageService.deleteMeeting(id: id)
     }
     
     func startMeeting() async throws {
@@ -75,7 +69,8 @@ class MeetingService: NSObject, ObservableObject {
         finalTranscript = ""
         meetingSummary = nil
         error = nil
-        meetingSegments = []
+        isGeneratingSummary = false
+        summaryError = nil
         
         // Create new meeting session
         currentMeeting = MeetingSession(
@@ -84,20 +79,22 @@ class MeetingService: NSObject, ObservableObject {
             title: "Meeting \(DateFormatter.shortDateTime.string(from: Date()))"
         )
         
-        // Check and request microphone permission
-        let hasPermission = await requestMicrophonePermission()
-        if !hasPermission {
-            throw MeetingError.speechRecognitionUnavailable
+        // Create and start the controller
+        controller = MeetingAssistantController()
+        guard let controller = controller else {
+            throw MeetingError.audioConfigurationFailed
         }
         
-        // Phase 1: Skip ScreenCaptureKit, use direct microphone access only
-        logger.info("Phase 1: Using direct microphone access for reliability")
-        
-        // Start transcription (includes microphone setup)
-        try await startTranscription()
-        
-        isRecording = true
-        logger.info("Meeting started successfully")
+        do {
+            try await controller.start()
+            startTranscriptionObserver()
+            startControllerObserver()
+            isRecording = true
+            logger.info("Meeting started successfully")
+        } catch {
+            self.error = .audioConfigurationFailed
+            throw error
+        }
     }
     
     func stopMeeting() async throws {
@@ -107,14 +104,12 @@ class MeetingService: NSObject, ObservableObject {
             throw MeetingError.notRecording
         }
         
-        // Stop transcription (includes microphone cleanup)
-        await stopTranscription()
-        
-        // Phase 1: No ScreenCaptureKit cleanup needed
-        logger.info("Phase 1: Direct microphone access stopped")
-        
-        // Generate summary
-        await generateMeetingSummary()
+        // Stop the controller
+        controller?.stop()
+        transcriptionObserver?.cancel()
+        transcriptionObserver = nil
+        controllerObserver?.cancel()
+        controllerObserver = nil
         
         // Update meeting session
         currentMeeting?.endTime = Date()
@@ -123,334 +118,128 @@ class MeetingService: NSObject, ObservableObject {
         
         isRecording = false
         logger.info("Meeting stopped successfully")
+        
+        // Keep controller reference until summary is generated
+        // It will be cleaned up when summary generation completes
     }
     
     // MARK: - Private Implementation
     
     private func setupServices() {
-        // Check API availability and setup appropriate services
-        if #available(macOS 26.0, *) {
-            setupMacOS26Services()
-        } else {
-            setupLegacyServices()
-        }
+        logger.info("Setting up meeting services with new architecture")
     }
     
-    @available(macOS 26.0, *)
-    private func setupMacOS26Services() {
-        logger.info("Setting up macOS 26 native services")
+    private func startTranscriptionObserver() {
+        guard let controller = controller else { return }
         
-        // Initialize Foundation Models
-        languageSession = LanguageModelSession()
-        
-        // Speech services will be initialized when recording starts
-        logger.info("macOS 26 services configured")
-    }
-    
-    private func setupLegacyServices() {
-        logger.info("Setting up legacy services for pre-macOS 26")
-        
-        // Initialize legacy speech recognizer
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        
-        logger.info("Legacy services configured")
-    }
-    
-    // MARK: - Audio Capture (ScreenCaptureKit)
-    
-    private func startAudioCapture() async throws {
-        logger.info("Starting ScreenCaptureKit audio capture...")
-        
-        // For Phase 1, use direct microphone access instead of ScreenCaptureKit
-        // This avoids the video stream issues and works more reliably
-        logger.info("Phase 1: Using direct microphone access for stability")
-        
-        // ScreenCaptureKit setup is disabled for Phase 1 due to:
-        // 1. Stream output errors when only audio is needed
-        // 2. Complex audio buffer conversion requirements
-        // 3. Better reliability with direct AVAudioEngine approach
-        
-        // The audio will be captured directly by AVAudioEngine in startLegacyTranscription()
-        logger.info("Audio capture configured for direct microphone access")
-    }
-    
-    private func stopAudioCapture() async {
-        logger.info("Stopping audio capture...")
-        
-        if let stream = screenStream {
-            do {
-                try await stream.stopCapture()
-            } catch {
-                logger.error("Error stopping capture: \(error)")
-            }
-        }
-        
-        screenStream = nil
-        streamConfig = nil
-        
-        logger.info("Audio capture stopped")
-    }
-    
-    // MARK: - Transcription Layer
-    
-    private func startTranscription() async throws {
-        // For Phase 1, use legacy transcription for stability
-        // macOS 26 APIs will be enabled in future phases when they're more stable
-        try startLegacyTranscription()
-        
-        // TODO: Enable macOS 26 transcription when APIs are stable
-        // if #available(macOS 26.0, *) {
-        //     try await startMacOS26Transcription() 
-        // } else {
-        //     try startLegacyTranscription()
-        // }
-    }
-    
-    // TODO: Re-enable when macOS 26 APIs are stable in future phases
-    /*
-    @available(macOS 26.0, *)
-    private func startMacOS26Transcription() async throws {
-        logger.info("Starting macOS 26 native transcription")
-        
-        // Initialize SpeechTranscriber with appropriate configuration
-        let locale = Locale(identifier: "en-US")
-        
-        // Create SpeechTranscriber - API still unstable in beta 4
-        speechTranscriber = SpeechTranscriber(locale: locale, preset: .dictation)
-        
-        guard let transcriber = speechTranscriber else {
-            throw MeetingError.speechTranscriberInitFailed
-        }
-        
-        // Initialize SpeechAnalyzer
-        speechAnalyzer = SpeechAnalyzer(modules: [transcriber])
-        
-        // Set up async streams for live and final transcripts
-        await setupTranscriptionStreams()
-        
-        logger.info("macOS 26 transcription started")
-    }
-    */
-    
-    // TODO: Re-enable when macOS 26 APIs are stable in future phases
-    /*
-    @available(macOS 26.0, *)
-    private func setupTranscriptionStreams() async {
-        guard let transcriber = speechTranscriber else { return }
-        
-        // Handle transcription results from async stream
-        Task {
-            do {
-                for try await result in transcriber.results {
-                    if result.isFinal {
-                        // Final result - add to transcript
-                        await MainActor.run {
-                            let text = String(describing: result.text)
-                            self.finalTranscript += text + " "
-                            self.liveTranscript = ""
-                        }
-                        
-                        // Store final transcript segment
-                        await storeMeetingSegment(result)
-                    } else {
-                        // Live/volatile result - update UI
-                        await MainActor.run {
-                            self.liveTranscript = String(describing: result.text)
-                        }
-                    }
-                }
-            } catch {
-                logger.error("Transcription stream error: \(error)")
-                await MainActor.run {
-                    self.error = .transcriptionFailed
-                }
-            }
-        }
-    }
-    */
-    
-    private func startLegacyTranscription() throws {
-        logger.info("Starting legacy transcription")
-        
-        // On macOS, microphone permission is handled automatically by SFSpeechRecognizer
-        logger.info("Starting legacy transcription with automatic permission handling")
-        
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            throw MeetingError.speechRecognitionUnavailable
-        }
-        
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let request = recognitionRequest else {
-            throw MeetingError.speechRecognitionRequestFailed
-        }
-        
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
-        
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            DispatchQueue.main.async {
-                if let result = result {
-                    self?.liveTranscript = result.bestTranscription.formattedString
+        transcriptionObserver = Task { [weak self] in
+            guard let self = self else { return }
+            
+            var lastLiveUpdate = ""
+            var lastFinalUpdate = ""
+            
+            // Observe live transcription updates with throttling
+            while !Task.isCancelled {
+                if let transcriber = controller.transcriber {
+                    let currentLive = String(transcriber.liveText.characters)
+                    let segments = transcriber.finalisedSegments
+                    let currentFinal = segments.map { $0.text }.joined(separator: " ")
                     
-                    if result.isFinal {
-                        self?.finalTranscript += result.bestTranscription.formattedString + " "
-                        self?.liveTranscript = ""
+                    // Only update UI if content actually changed
+                    if currentLive != lastLiveUpdate || currentFinal != lastFinalUpdate {
+                        await MainActor.run {
+                            if currentLive != lastLiveUpdate {
+                                self.liveTranscript = currentLive
+                                lastLiveUpdate = currentLive
+                            }
+                            
+                            if currentFinal != lastFinalUpdate {
+                                self.finalTranscript = currentFinal
+                                lastFinalUpdate = currentFinal
+                            }
+                        }
                     }
                 }
                 
-                if let error = error {
-                    self?.logger.error("Recognition error: \(error)")
-                    self?.error = .transcriptionFailed
-                }
+                // Throttle updates to 5 times per second to prevent UI overwhelm
+                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
             }
         }
-        
-        // Start audio engine
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
-        }
-        
-        audioEngine.prepare()
-        try audioEngine.start()
-        
-        logger.info("Legacy transcription started")
     }
     
-    private func stopTranscription() async {
-        // For Phase 1, use legacy transcription for stability
-        stopLegacyTranscription()
+    private func startControllerObserver() {
+        guard let controller = controller else { return }
         
-        // TODO: Enable macOS 26 transcription when APIs are stable
-        // if #available(macOS 26.0, *) {
-        //     await stopMacOS26Transcription() 
-        // } else {
-        //     stopLegacyTranscription()
-        // }
-    }
-    
-    // TODO: Re-enable when macOS 26 APIs are stable in future phases
-    /*
-    @available(macOS 26.0, *)
-    private func stopMacOS26Transcription() async {
-        logger.info("Stopping macOS 26 transcription")
-        
-        // Clean up analyzer and transcriber
-        speechAnalyzer = nil
-        speechTranscriber = nil
-        
-        logger.info("macOS 26 transcription stopped")
-    }
-    */
-    
-    private func stopLegacyTranscription() {
-        logger.info("Stopping legacy transcription")
-        
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        
-        recognitionRequest = nil
-        recognitionTask = nil
-        
-        logger.info("Legacy transcription stopped")
-    }
-    
-    // MARK: - AI Summary Generation
-    
-    private func generateMeetingSummary() async {
-        guard !finalTranscript.isEmpty else {
-            logger.warning("No transcript available for summary generation")
-            return
-        }
-        
-        // For Phase 1, use basic summary generation for stability
-        generateBasicSummary()
-        
-        // TODO: Enable macOS 26 AI summary when APIs are stable
-        // if #available(macOS 26.0, *) {
-        //     await generateMacOS26Summary()
-        // } else {
-        //     generateBasicSummary()
-        // }
-    }
-    
-    // TODO: Re-enable when macOS 26 APIs are stable in future phases
-    /*
-    @available(macOS 26.0, *)
-    private func generateMacOS26Summary() async {
-        logger.info("Generating meeting summary with Foundation Models")
-        
-        guard let session = languageSession else {
-            logger.error("Language model session not available")
-            return
-        }
-        
-        let prompt = """
-        Please analyze this meeting transcript and provide a structured summary:
-        
-        \(finalTranscript)
-        
-        Generate a comprehensive summary including key topics, decisions, and action items.
-        """
-        
-        do {
-            let response = try await session.respond(to: prompt)
-            let _ = response.content // Use content for future summary generation
+        controllerObserver = Task { [weak self] in
+            guard let self = self else { return }
             
-            await MainActor.run {
-                self.meetingSummary = MeetingSummary(
-                    title: self.currentMeeting?.title ?? "Meeting Summary",
-                    duration: self.formatDuration(),
-                    keyTopics: self.extractKeyTopics(),
-                    wordCount: self.finalTranscript.split(separator: " ").count,
-                    confidence: 0.9
-                )
-            }
-            logger.info("Meeting summary generated successfully")
-        } catch {
-            logger.error("Failed to generate summary: \(error)")
-            await MainActor.run {
-                self.error = .summaryGenerationFailed
+            var lastGeneratingSummary = false
+            var lastSummaryError: Error?
+            var lastSummary: MeetingSummary?
+            
+            // Observe controller state changes with throttling
+            while !Task.isCancelled {
+                let currentGenerating = controller.isGeneratingSummary
+                let currentError = controller.summaryError
+                let currentSummary = controller.summary
+                
+                // Only update UI if state actually changed
+                var shouldUpdate = false
+                
+                if currentGenerating != lastGeneratingSummary {
+                    lastGeneratingSummary = currentGenerating
+                    shouldUpdate = true
+                }
+                
+                if currentError?.localizedDescription != lastSummaryError?.localizedDescription {
+                    lastSummaryError = currentError
+                    shouldUpdate = true
+                }
+                
+                if currentSummary?.title != lastSummary?.title {
+                    lastSummary = currentSummary
+                    shouldUpdate = true
+                }
+                
+                if shouldUpdate {
+                    await MainActor.run {
+                        self.isGeneratingSummary = currentGenerating
+                        self.summaryError = currentError
+                        
+                        if let summary = currentSummary {
+                            self.meetingSummary = summary
+                            
+                            // Clean up controller after summary is generated
+                            if !currentGenerating {
+                                self.controller = nil
+                            }
+                        }
+                    }
+                }
+                
+                // Check every 0.5 seconds for state changes
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
     }
-    */
+    
+    // MARK: - Permission Management (moved to Public Interface section)
+    
+    // MARK: - Summary Generation (delegated to MeetingLLMService)
     
     private func generateBasicSummary() {
-        logger.info("Generating basic summary for legacy system")
+        logger.info("Summary generation is now handled by MeetingAssistantController")
         
-        // Create a simple summary for pre-macOS 26 systems
-        meetingSummary = MeetingSummary(
-            title: currentMeeting?.title ?? "Meeting Summary",
-            duration: formatDuration(),
-            keyTopics: extractKeyTopics(),
-            wordCount: finalTranscript.split(separator: " ").count,
-            confidence: 0.8
-        )
+        // Legacy fallback if needed
+        if meetingSummary == nil {
+            meetingSummary = MeetingSummary(
+                title: currentMeeting?.title ?? "Meeting Summary",
+                attendees: [],
+                keyDecisions: extractKeyTopics(),
+                actionItems: []
+            )
+        }
     }
-    
-    // MARK: - Storage Layer
-    
-    // TODO: Re-enable when macOS 26 APIs are stable in future phases
-    /*
-    @available(macOS 26.0, *)
-    private func storeMeetingSegment(_ result: SpeechTranscriber.Result) async {
-        let segment = MeetingTranscriptSegment(
-            id: UUID(),
-            timestamp: Date(),
-            text: String(describing: result.text),
-            confidence: 0.9, // Simplified for Phase 1 - real confidence would come from result
-            speaker: "Speaker 1", // Simplified speaker detection for Phase 1
-            audioSource: .microphone
-        )
-        
-        meetingSegments.append(segment)
-    }
-    */
     
     // MARK: - Utility Methods
     
@@ -482,39 +271,6 @@ class MeetingService: NSObject, ObservableObject {
     }
 }
 
-// MARK: - SCStreamOutput Delegate
-
-extension MeetingService: SCStreamOutput {
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        // Phase 1: ScreenCaptureKit audio processing disabled
-        // Using direct AVAudioEngine microphone access for reliability
-        logger.debug("ScreenCaptureKit sample buffer received but ignored in Phase 1")
-        
-        // TODO: Future phases will implement proper audio buffer conversion
-        // when ScreenCaptureKit integration is needed for system audio capture
-    }
-    
-    private func convertToAudioBuffer(_ sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
-        // Phase 1: Disabled ScreenCaptureKit audio conversion
-        // Direct microphone access via AVAudioEngine is more reliable
-        logger.debug("ScreenCaptureKit audio conversion disabled in Phase 1")
-        return nil
-    }
-}
-
-// MARK: - SCStreamDelegate
-
-extension MeetingService: SCStreamDelegate {
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        logger.error("Stream stopped with error: \(error)")
-        Task { @MainActor in
-            self.error = .audioStreamError
-            if self.isRecording {
-                try? await self.stopMeeting()
-            }
-        }
-    }
-}
 
 // MARK: - Data Models
 
@@ -537,14 +293,7 @@ struct MeetingTranscriptSegment {
     let audioSource: AudioSource
 }
 
-// Phase 1: Simple struct without @Generable for compatibility
-struct MeetingSummary: Codable {
-    var title: String
-    var duration: String
-    var keyTopics: [String]
-    var wordCount: Int
-    var confidence: Float
-}
+// MeetingSummary is now defined in MeetingLLMService.swift
 
 enum AudioSource {
     case microphone
@@ -600,6 +349,20 @@ extension DateFormatter {
     static let shortDateTime: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    
+    static let shortDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .none
+        return formatter
+    }()
+    
+    static let longDateTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter
     }()
